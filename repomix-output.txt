@@ -1,0 +1,1315 @@
+This file is a merged representation of the entire codebase, combined into a single document by Repomix.
+
+================================================================
+File Summary
+================================================================
+
+Purpose:
+--------
+This file contains a packed representation of the entire repository's contents.
+It is designed to be easily consumable by AI systems for analysis, code review,
+or other automated processes.
+
+File Format:
+------------
+The content is organized as follows:
+1. This summary section
+2. Repository information
+3. Directory structure
+4. Multiple file entries, each consisting of:
+  a. A separator line (================)
+  b. The file path (File: path/to/file)
+  c. Another separator line
+  d. The full contents of the file
+  e. A blank line
+
+Usage Guidelines:
+-----------------
+- This file should be treated as read-only. Any changes should be made to the
+  original repository files, not this packed version.
+- When processing this file, use the file path to distinguish
+  between different files in the repository.
+- Be aware that this file may contain sensitive information. Handle it with
+  the same level of security as you would the original repository.
+
+Notes:
+------
+- Some files may have been excluded based on .gitignore rules and Repomix's configuration
+- Binary files are not included in this packed representation. Please refer to the Repository Structure section for a complete list of file paths, including binary files
+- Files matching patterns in .gitignore are excluded
+- Files matching default ignore patterns are excluded
+- Files are sorted by Git change count (files with more changes are at the bottom)
+
+Additional Info:
+----------------
+
+================================================================
+Directory Structure
+================================================================
+.gitignore
+backend/.env
+backend/config/database.js
+backend/controllers/auth.controller.js
+backend/controllers/event.controller.js
+backend/controllers/review.controller.js
+backend/middlewares/auth.middleware.js
+backend/package.json
+backend/routes/auth.routes.js
+backend/routes/event.routes.js
+backend/routes/notification.routes.js
+backend/routes/review.routes.js
+backend/server.js
+README.md
+
+================================================================
+Files
+================================================================
+
+================
+File: backend/.env
+================
+PORT=5000
+DB_HOST=localhost
+DB_USER=root
+DB_PASSWORD=Nyandana@23!
+DB_NAME=eventreviews
+JWT_SECRET=your_secret_key_here
+
+================
+File: backend/config/database.js
+================
+// config/database.js
+
+// Create a connection pool
+const pool = mysql.createPool({
+    host: process.env.DB_HOST || 'localhost',
+    user: process.env.DB_USER || 'root',
+    password: process.env.DB_PASSWORD || '',
+    database: process.env.DB_NAME || 'eventreviews',
+    waitForConnections: true,
+    connectionLimit: 10,
+    queueLimit: 0
+  });
+  
+  // Test connection function
+  async function testConnection() {
+    try {
+      const connection = await pool.getConnection();
+      console.log('Database connection established successfully');
+      connection.release();
+    } catch (error) {
+      console.error('Database connection failed:', error);
+      process.exit(1);
+    }
+  }
+  
+  // Execute test connection on startup
+  testConnection();
+  
+  module.exports = pool;
+
+================
+File: backend/controllers/auth.controller.js
+================
+const bcrypt = require('bcryptjs');
+const jwt = require('jsonwebtoken');
+const db = require('../config/db');
+
+exports.register = async (req, res) => {
+  try {
+    const { username, email, password } = req.body;
+    
+    // Validate input
+    if (!username || !email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'All fields are required'
+      });
+    }
+    
+    // Check if user already exists
+    const [existingUsers] = await db.query(
+      'SELECT * FROM users WHERE email = ? OR username = ?',
+      [email, username]
+    );
+    
+    if (existingUsers.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'User with this email or username already exists'
+      });
+    }
+    
+    // Hash password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+    
+    // Create user
+    const [result] = await db.query(
+      'INSERT INTO users (username, email, password) VALUES (?, ?, ?)',
+      [username, email, hashedPassword]
+    );
+    
+    // Generate JWT token
+    const token = jwt.sign(
+      { id: result.insertId, username, email },
+      process.env.JWT_SECRET,
+      { expiresIn: '1d' }
+    );
+    
+    res.status(201).json({
+      success: true,
+      message: 'User registered successfully',
+      token,
+      user: {
+        id: result.insertId,
+        username,
+        email
+      }
+    });
+  } catch (error) {
+    console.error('Registration error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Registration failed'
+    });
+  }
+};
+
+exports.login = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    
+    // Validate input
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'All fields are required'
+      });
+    }
+    
+    // Find user by email
+    const [users] = await db.query(
+      'SELECT * FROM users WHERE email = ?',
+      [email]
+    );
+    
+    if (users.length === 0) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
+    }
+    
+    const user = users[0];
+    
+    // Compare passwords
+    const isMatch = await bcrypt.compare(password, user.password);
+    
+    if (!isMatch) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid credentials'
+      });
+    }
+    
+    // Generate JWT token
+    const token = jwt.sign(
+      { id: user.id, username: user.username, email: user.email, isAdmin: user.is_admin },
+      process.env.JWT_SECRET,
+      { expiresIn: '1d' }
+    );
+    
+    res.json({
+      success: true,
+      message: 'Login successful',
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        isAdmin: user.is_admin,
+        profilePic: user.profile_pic
+      }
+    });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Login failed'
+    });
+  }
+};
+
+exports.getProfile = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    const [users] = await db.query(
+      'SELECT id, username, email, profile_pic, bio, is_admin, created_at FROM users WHERE id = ?',
+      [userId]
+    );
+    
+    if (users.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    res.json({
+      success: true,
+      user: users[0]
+    });
+  } catch (error) {
+    console.error('Get profile error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get profile'
+    });
+  }
+};
+
+exports.updateProfile = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { username, bio, profilePic } = req.body;
+    
+    // Check if username is taken by another user
+    if (username) {
+      const [existingUsers] = await db.query(
+        'SELECT id FROM users WHERE username = ? AND id != ?',
+        [username, userId]
+      );
+      
+      if (existingUsers.length > 0) {
+        return res.status(400).json({
+          success: false,
+          message: 'Username is already taken'
+        });
+      }
+    }
+    
+    // Build update query dynamically
+    let updateQuery = 'UPDATE users SET ';
+    const updateValues = [];
+    let hasUpdates = false;
+    
+    if (username) {
+      updateQuery += 'username = ?, ';
+      updateValues.push(username);
+      hasUpdates = true;
+    }
+    
+    if (bio !== undefined) {
+      updateQuery += 'bio = ?, ';
+      updateValues.push(bio);
+      hasUpdates = true;
+    }
+    
+    if (profilePic) {
+      updateQuery += 'profile_pic = ?, ';
+      updateValues.push(profilePic);
+      hasUpdates = true;
+    }
+    
+    if (!hasUpdates) {
+      return res.status(400).json({
+        success: false,
+        message: 'No update data provided'
+      });
+    }
+    
+    // Remove trailing comma and space
+    updateQuery = updateQuery.slice(0, -2);
+    
+    // Add WHERE clause
+    updateQuery += ' WHERE id = ?';
+    updateValues.push(userId);
+    
+    // Execute update
+    await db.query(updateQuery, updateValues);
+    
+    res.json({
+      success: true,
+      message: 'Profile updated successfully'
+    });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update profile'
+    });
+  }
+};
+
+================
+File: backend/controllers/event.controller.js
+================
+// File: controllers/event.controller.js
+const db = require('../config/db');
+
+exports.getAllEvents = async (req, res) => {
+  try {
+    const { category, location, date, status, search } = req.query;
+    
+    // Build query with conditions
+    let query = `
+      SELECT e.*, 
+             ROUND(AVG(r.rating), 2) as average_rating, 
+             COUNT(r.id) as review_count,
+             u.username as organizer_name
+      FROM events e
+      LEFT JOIN reviews r ON e.id = r.event_id
+      LEFT JOIN users u ON e.organizer_id = u.id
+    `;
+    
+    const queryParams = [];
+    const conditions = [];
+    
+    // Add category filter
+    if (category) {
+      query += ` JOIN event_categories ec ON e.id = ec.event_id`;
+      conditions.push(`ec.category_id = ?`);
+      queryParams.push(category);
+    }
+    
+    // Add location filter
+    if (location) {
+      conditions.push(`e.location LIKE ?`);
+      queryParams.push(`%${location}%`);
+    }
+    
+    // Add date filter
+    if (date) {
+      conditions.push(`e.date = ?`);
+      queryParams.push(date);
+    }
+    
+    // Add status filter
+    if (status) {
+      conditions.push(`e.status = ?`);
+      queryParams.push(status);
+    }
+    
+    // Add search filter
+    if (search) {
+      conditions.push(`(e.title LIKE ? OR e.description LIKE ?)`);
+      queryParams.push(`%${search}%`, `%${search}%`);
+    }
+    
+    // Add WHERE clause if there are conditions
+    if (conditions.length > 0) {
+      query += ` WHERE ${conditions.join(' AND ')}`;
+    }
+    
+    // Group by to handle aggregations
+    query += ` GROUP BY e.id`;
+    
+    // Order by date
+    query += ` ORDER BY e.date ASC`;
+    
+    const [events] = await db.query(query, queryParams);
+    
+    // For each event, get the categories
+    for (const event of events) {
+      const [categories] = await db.query(`
+        SELECT c.id, c.name 
+        FROM categories c
+        JOIN event_categories ec ON c.id = ec.category_id
+        WHERE ec.event_id = ?
+      `, [event.id]);
+      
+      event.categories = categories;
+    }
+    
+    res.json({
+      success: true,
+      count: events.length,
+      events
+    });
+  } catch (error) {
+    console.error('Get all events error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get events'
+    });
+  }
+};
+
+exports.getEventById = async (req, res) => {
+  try {
+    const eventId = req.params.id;
+    
+    // Get event details
+    const [events] = await db.query(`
+      SELECT e.*,
+             u.username as organizer_name,
+             u.email as organizer_email,
+             ROUND(AVG(r.rating), 2) as average_rating,
+             COUNT(r.id) as review_count
+      FROM events e
+      JOIN users u ON e.organizer_id = u.id
+      LEFT JOIN reviews r ON e.id = r.event_id
+      WHERE e.id = ?
+      GROUP BY e.id
+    `, [eventId]);
+    
+    if (events.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Event not found'
+      });
+    }
+    
+    const event = events[0];
+    
+    // Get event categories
+    const [categories] = await db.query(`
+      SELECT c.id, c.name 
+      FROM categories c
+      JOIN event_categories ec ON c.id = ec.category_id
+      WHERE ec.event_id = ?
+    `, [eventId]);
+    
+    event.categories = categories;
+    
+    // Get recent reviews
+    const [reviews] = await db.query(`
+      SELECT r.*,
+             u.username,
+             u.profile_pic
+      FROM reviews r
+      JOIN users u ON r.user_id = u.id
+      WHERE r.event_id = ?
+      ORDER BY r.created_at DESC
+      LIMIT 5
+    `, [eventId]);
+    
+    event.recent_reviews = reviews;
+    
+    res.json({
+      success: true,
+      event
+    });
+  } catch (error) {
+    console.error('Get event by ID error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get event'
+    });
+  }
+};
+
+exports.createEvent = async (req, res) => {
+  try {
+    const {
+      title,
+      description,
+      date,
+      time,
+      location,
+      image,
+      categories
+    } = req.body;
+    
+    // Validate input
+    if (!title || !description || !date || !time || !location) {
+      return res.status(400).json({
+        success: false,
+        message: 'Required fields missing'
+      });
+    }
+    
+    // Start a transaction
+    const connection = await db.getConnection();
+    await connection.beginTransaction();
+    
+    try {
+      // Insert event
+      const [result] = await connection.query(`
+        INSERT INTO events (title, description, date, time, location, organizer_id, image)
+        VALUES (?, ?, ?, ?, ?, ?, ?)
+      `, [title, description, date, time, location, req.user.id, image]);
+      
+      const eventId = result.insertId;
+      
+      // Insert event categories
+      if (categories && categories.length > 0) {
+        const categoryValues = categories.map(categoryId => [eventId, categoryId]);
+        await connection.query(`
+          INSERT INTO event_categories (event_id, category_id)
+          VALUES ?
+        `, [categoryValues]);
+      }
+      
+      // Commit transaction
+      await connection.commit();
+      connection.release();
+      
+      res.status(201).json({
+        success: true,
+        message: 'Event created successfully',
+        eventId
+      });
+    } catch (error) {
+      // Rollback transaction on error
+      await connection.rollback();
+      connection.release();
+      throw error;
+    }
+  } catch (error) {
+    console.error('Create event error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create event'
+    });
+  }
+};
+
+exports.updateEvent = async (req, res) => {
+  try {
+    const eventId = req.params.id;
+    const {
+      title,
+      description,
+      date,
+      time,
+      location,
+      image,
+      status,
+      categories
+    } = req.body;
+    
+    // Check if event exists
+    const [events] = await db.query(
+      'SELECT * FROM events WHERE id = ?',
+      [eventId]
+    );
+    
+    if (events.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Event not found'
+      });
+    }
+    
+    // Start a transaction
+    const connection = await db.getConnection();
+    await connection.beginTransaction();
+    
+    try {
+      // Build update query dynamically
+      const updateFields = [];
+      const updateValues = [];
+      
+      if (title) {
+        updateFields.push('title = ?');
+        updateValues.push(title);
+      }
+      
+      if (description !== undefined) {
+        updateFields.push('description = ?');
+        updateValues.push(description);
+      }
+      
+      if (date) {
+        updateFields.push('date = ?');
+        updateValues.push(date);
+      }
+      
+      if (time) {
+        updateFields.push('time = ?');
+        updateValues.push(time);
+      }
+      
+      if (location) {
+        updateFields.push('location = ?');
+        updateValues.push(location);
+      }
+      
+      if (image) {
+        updateFields.push('image = ?');
+        updateValues.push(image);
+      }
+      
+      if (status) {
+        updateFields.push('status = ?');
+        updateValues.push(status);
+      }
+      
+      // Add event ID to values
+      updateValues.push(eventId);
+      
+      // Update event if there are fields to update
+      if (updateFields.length > 0) {
+        await connection.query(`
+          UPDATE events
+          SET ${updateFields.join(', ')}
+          WHERE id = ?
+        `, updateValues);
+      }
+      
+      // Update categories if provided
+      if (categories && Array.isArray(categories)) {
+        // Delete existing categories
+        await connection.query(
+          'DELETE FROM event_categories WHERE event_id = ?',
+          [eventId]
+        );
+        
+        // Insert new categories
+        if (categories.length > 0) {
+          const categoryValues = categories.map(categoryId => [eventId, categoryId]);
+          await connection.query(`
+            INSERT INTO event_categories (event_id, category_id)
+            VALUES ?
+          `, [categoryValues]);
+        }
+      }
+      
+      // Commit transaction
+      await connection.commit();
+      connection.release();
+      
+      res.json({
+        success: true,
+        message: 'Event updated successfully'
+      });
+    } catch (error) {
+      // Rollback transaction on error
+      await connection.rollback();
+      connection.release();
+      throw error;
+    }
+  } catch (error) {
+    console.error('Update event error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update event'
+    });
+  }
+};
+
+exports.deleteEvent = async (req, res) => {
+  try {
+    const eventId = req.params.id;
+    
+    // Check if event exists
+    const [events] = await db.query(
+      'SELECT * FROM events WHERE id = ?',
+      [eventId]
+    );
+    
+    if (events.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Event not found'
+      });
+    }
+    
+    // Delete event (cascading will handle related records)
+    await db.query('DELETE FROM events WHERE id = ?', [eventId]);
+    
+    res.json({
+      success: true,
+      message: 'Event deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete event error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete event'
+    });
+  }
+};
+
+================
+File: backend/controllers/review.controller.js
+================
+// File: controllers/review.controller.js
+const db = require('../config/db');
+const aiService = require('../services/ai.service');
+
+exports.getEventReviews = async (req, res) => {
+  try {
+    const eventId = req.params.eventId;
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const offset = (page - 1) * limit;
+    
+    // Check if event exists
+    const [events] = await db.query(
+      'SELECT * FROM events WHERE id = ?',
+      [eventId]
+    );
+    
+    if (events.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Event not found'
+      });
+    }
+    
+    // Get reviews with pagination
+    const [reviews] = await db.query(`
+      SELECT r.*,
+             u.username,
+             u.profile_pic
+      FROM reviews r
+      JOIN users u ON r.user_id = u.id
+      WHERE r.event_id = ?
+      ORDER BY r.created_at DESC
+      LIMIT ? OFFSET ?
+    `, [eventId, limit, offset]);
+    
+    // Get total count for pagination
+    const [countResult] = await db.query(
+      'SELECT COUNT(*) as total FROM reviews WHERE event_id = ?',
+      [eventId]
+    );
+    
+    const totalReviews = countResult[0].total;
+    const totalPages = Math.ceil(totalReviews / limit);
+    
+    // Get average rating
+    const [ratingResult] = await db.query(
+      'SELECT AVG(rating) as average_rating FROM reviews WHERE event_id = ?',
+      [eventId]
+    );
+    
+    const averageRating = ratingResult[0].average_rating || 0;
+    
+    // Get rating distribution
+    const [distribution] = await db.query(`
+      SELECT rating, COUNT(*) as count
+      FROM reviews
+      WHERE event_id = ?
+      GROUP BY rating
+      ORDER BY rating DESC
+    `, [eventId]);
+    
+    // Get sentiment distribution
+    const [sentimentDistribution] = await db.query(`
+      SELECT sentiment_category, COUNT(*) as count
+      FROM reviews
+      WHERE event_id = ? AND sentiment_category IS NOT NULL
+      GROUP BY sentiment_category
+    `, [eventId]);
+    
+    res.json({
+      success: true,
+      reviews,
+      pagination: {
+        page,
+        limit,
+        totalPages,
+        totalReviews
+      },
+      stats: {
+        averageRating,
+        ratingDistribution: distribution,
+        sentimentDistribution
+      }
+    });
+  } catch (error) {
+    console.error('Get event reviews error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to get reviews'
+    });
+  }
+};
+
+exports.createReview = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { eventId, rating, content } = req.body;
+    
+    // Validate input
+    if (!eventId || !rating || !content) {
+      return res.status(400).json({
+        success: false,
+        message: 'Required fields missing'
+      });
+    }
+    
+    if (rating < 1 || rating > 5) {
+      return res.status(400).json({
+        success: false,
+        message: 'Rating must be between 1 and 5'
+      });
+    }
+    
+    // Check if event exists
+    const [events] = await db.query(
+      'SELECT * FROM events WHERE id = ?',
+      [eventId]
+    );
+    
+    if (events.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Event not found'
+      });
+    }
+    
+    // Check if user already reviewed this event
+    const [existingReviews] = await db.query(
+      'SELECT * FROM reviews WHERE user_id = ? AND event_id = ?',
+      [userId, eventId]
+    );
+    
+    if (existingReviews.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'You have already reviewed this event'
+      });
+    }
+    
+    // Analyze sentiment using Claude AI
+    const sentimentResult = await aiService.analyzeSentiment(content);
+    
+    // Insert review with sentiment analysis
+    const [result] = await db.query(`
+      INSERT INTO reviews (user_id, event_id, rating, content, sentiment_score, sentiment_category)
+      VALUES (?, ?, ?, ?, ?, ?)
+    `, [
+      userId, 
+      eventId, 
+      rating, 
+      content, 
+      sentimentResult.score,
+      sentimentResult.category
+    ]);
+    
+    // Update event average rating
+    await db.query(`
+      UPDATE events
+      SET avg_rating = (
+        SELECT AVG(rating)
+        FROM reviews
+        WHERE event_id = ?
+      )
+      WHERE id = ?
+    `, [eventId, eventId]);
+    
+    // Create notification for event organizer
+    const [eventDetails] = await db.query(
+      'SELECT organizer_id FROM events WHERE id = ?',
+      [eventId]
+    );
+    
+    if (eventDetails.length > 0) {
+      const organizerId = eventDetails[0].organizer_id;
+      
+      await db.query(`
+        INSERT INTO notifications (user_id, content, type, related_id)
+        VALUES (?, ?, ?, ?)
+      `, [
+        organizerId,
+        `New review for your event with rating ${rating}/5`,
+        'review',
+        result.insertId
+      ]);
+    }
+    
+    res.status(201).json({
+      success: true,
+      message: 'Review submitted successfully',
+      reviewId: result.insertId,
+      sentiment: {
+        score: sentimentResult.score,
+        category: sentimentResult.category
+      }
+    });
+  } catch (error) {
+    console.error('Create review error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to submit review'
+    });
+  }
+};
+
+exports.updateReview = async (req, res) => {
+  try {
+    const reviewId = req.params.id;
+    const userId = req.user.id;
+    const { rating, content } = req.body;
+    
+    // Validate input
+    if (!rating && !content) {
+      return res.status(400).json({
+        success: false,
+        message: 'Nothing to update'
+      });
+    }
+    
+    if (rating && (rating < 1 || rating > 5)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Rating must be between 1 and 5'
+      });
+    }
+    
+    // Check if review exists and belongs to the user
+    const [reviews] = await db.query(
+      'SELECT * FROM reviews WHERE id = ?',
+      [reviewId]
+    );
+    
+    if (reviews.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Review not found'
+      });
+    }
+    
+    const review = reviews[0];
+    
+    if (review.user_id !== userId) {
+      return res.status(403).json({
+        success: false,
+        message: 'You can only update your own reviews'
+      });
+    }
+    
+    // Start building update query
+    let updateQuery = 'UPDATE reviews SET ';
+    const updateValues = [];
+    const updates = [];
+    
+    if (rating) {
+      updates.push('rating = ?');
+      updateValues.push(rating);
+    }
+    
+    if (content) {
+      // Re-analyze sentiment if content changes
+      const sentimentResult = await aiService.analyzeSentiment(content);
+      
+      updates.push('content = ?, sentiment_score = ?, sentiment_category = ?');
+      updateValues.push(content, sentimentResult.score, sentimentResult.category);
+    }
+    
+    updates.push('updated_at = CURRENT_TIMESTAMP');
+    
+    // Complete the query
+    updateQuery += updates.join(', ') + ' WHERE id = ?';
+    updateValues.push(reviewId);
+    
+    // Execute update
+    await db.query(updateQuery, updateValues);
+    
+    // Update event average rating
+    await db.query(`
+      UPDATE events
+      SET avg_rating = (
+        SELECT AVG(rating)
+        FROM reviews
+        WHERE event_id = ?
+      )
+      WHERE id = ?
+    `, [review.event_id, review.event_id]);
+    
+    res.json({
+      success: true,
+      message: 'Review updated successfully'
+    });
+  } catch (error) {
+    console.error('Update review error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update review'
+    });
+  }
+};
+
+exports.deleteReview = async (req, res) => {
+  try {
+    const reviewId = req.params.id;
+    const userId = req.user.id;
+    
+    // Check if review exists and belongs to the user
+    const [reviews] = await db.query(
+      'SELECT * FROM reviews WHERE id = ?',
+      [reviewId]
+    );
+    
+    if (reviews.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Review not found'
+      });
+    }
+    
+    const review = reviews[0];
+    
+    // Only the review author or an admin can delete a review
+    if (review.user_id !== userId && !req.user.is_admin) {
+      return res.status(403).json({
+        success: false,
+        message: 'You do not have permission to delete this review'
+      });
+    }
+    
+    // Delete review
+    await db.query('DELETE FROM reviews WHERE id = ?', [reviewId]);
+    
+    // Update event average rating
+    await db.query(`
+      UPDATE events
+      SET avg_rating = (
+        SELECT AVG(rating)
+        FROM reviews
+        WHERE event_id = ?
+      )
+      WHERE id = ?
+    `, [review.event_id, review.event_id]);
+    
+    res.json({
+      success: true,
+      message: 'Review deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete review error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete review'
+    });
+  }
+};
+
+================
+File: backend/middlewares/auth.middleware.js
+================
+// File: middlewares/auth.middleware.js
+const jwt = require('jsonwebtoken');
+const db = require('../config/db');
+
+exports.verifyToken = async (req, res, next) => {
+  try {
+    // Get token from header
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({
+        success: false,
+        message: 'No token provided'
+      });
+    }
+    
+    const token = authHeader.split(' ')[1];
+    
+    // Verify token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // Check if user exists
+    const [users] = await db.query(
+      'SELECT id, username, email, is_admin FROM users WHERE id = ?',
+      [decoded.id]
+    );
+    
+    if (users.length === 0) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid token'
+      });
+    }
+    
+    // Attach user to request
+    req.user = users[0];
+    next();
+  } catch (error) {
+    console.error('Auth middleware error:', error);
+    res.status(401).json({
+      success: false,
+      message: 'Invalid token'
+    });
+  }
+};
+
+exports.isAdmin = (req, res, next) => {
+  if (!req.user.is_admin) {
+    return res.status(403).json({
+      success: false,
+      message: 'Access denied. Admin privileges required.'
+    });
+  }
+  next();
+};
+
+================
+File: backend/routes/auth.routes.js
+================
+// File: routes/auth.routes.js
+const express = require('express');
+const router = express.Router();
+const authController = require('../controllers/auth.controller');
+const authMiddleware = require('../middlewares/auth.middleware');
+
+router.post('/register', authController.register);
+router.post('/login', authController.login);
+router.get('/profile', authMiddleware.verifyToken, authController.getProfile);
+router.put('/profile', authMiddleware.verifyToken, authController.updateProfile);
+
+module.exports = router;
+
+================
+File: backend/routes/event.routes.js
+================
+// File: routes/event.routes.js
+const express = require('express');
+const router = express.Router();
+const eventController = require('../controllers/event.controller');
+const authMiddleware = require('../middlewares/auth.middleware');
+
+router.get('/', eventController.getAllEvents);
+router.get('/:id', eventController.getEventById);
+router.post('/', authMiddleware.verifyToken, authMiddleware.isAdmin, eventController.createEvent);
+router.put('/:id', authMiddleware.verifyToken, authMiddleware.isAdmin, eventController.updateEvent);
+router.delete('/:id', authMiddleware.verifyToken, authMiddleware.isAdmin, eventController.deleteEvent);
+
+module.exports = router;
+
+================
+File: backend/routes/notification.routes.js
+================
+const express = require('express');
+const router = express.Router();
+
+// Example route
+router.get('/', (req, res) => {
+    res.json({ message: 'Notification route is working!' });
+});
+
+module.exports = router;
+
+================
+File: backend/routes/review.routes.js
+================
+// File: routes/review.routes.js
+const express = require('express');
+const router = express.Router();
+const reviewController = require('../controllers/review.controller');
+const authMiddleware = require('../middlewares/auth.middleware');
+
+router.get('/event/:eventId', reviewController.getEventReviews);
+router.post('/', authMiddleware.verifyToken, reviewController.createReview);
+router.put('/:id', authMiddleware.verifyToken, reviewController.updateReview);
+router.delete('/:id', authMiddleware.verifyToken, reviewController.deleteReview);
+
+module.exports = router;
+
+================
+File: backend/server.js
+================
+// File: server.js
+const express = require('express');
+const cors = require('cors');
+const helmet = require('helmet');
+const morgan = require('morgan');
+const dotenv = require('dotenv');
+const rateLimit = require('express-rate-limit');
+
+// Load environment variables
+dotenv.config();
+
+// Import routes
+const authRoutes = require('./routes/auth.routes');
+const eventRoutes = require('./routes/event.routes');
+const reviewRoutes = require('./routes/review.routes');
+const calendarRoutes = require('./routes/calendar.routes');
+const recommendationRoutes = require('./routes/recommendation.routes');
+const notificationRoutes = require('./routes/notification.routes');
+const categoryRoutes = require('./routes/category.routes');
+
+// Initialize app
+const app = express();
+const PORT = process.env.PORT || 5000;
+
+// Middleware
+app.use(helmet()); // Security headers
+app.use(cors()); // Enable CORS
+app.use(express.json()); // Parse JSON bodies
+app.use(morgan('dev')); // Logging
+
+// Rate limiting
+const apiLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  max: 100, // Limit each IP to 100 requests per windowMs
+  standardHeaders: true,
+  legacyHeaders: false,
+});
+app.use('/api', apiLimiter);
+
+// Routes
+app.use('/api/auth', authRoutes);
+app.use('/api/events', eventRoutes);
+app.use('/api/reviews', reviewRoutes);
+app.use('/api/calendar', calendarRoutes);
+app.use('/api/recommendations', recommendationRoutes);
+app.use('/api/notifications', notificationRoutes);
+app.use('/api/categories', categoryRoutes);
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  res.status(500).json({
+    success: false,
+    message: 'Something went wrong!',
+    error: process.env.NODE_ENV === 'development' ? err.message : undefined
+  });
+});
+
+// Start server
+app.listen(PORT, () => {
+  console.log(`Server running on port ${PORT}`);
+});
+
+================
+File: .gitignore
+================
+.qodo
+backend\node_modules
+
+================
+File: backend/package.json
+================
+{
+  "name": "backend",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "bcryptjs": "^3.0.2",
+    "compression": "^1.8.0",
+    "cors": "^2.8.5",
+    "dotenv": "^16.4.7",
+    "express": "^4.21.2",
+    "express-rate-limit": "^7.5.0",
+    "helmet": "^8.0.0",
+    "jsonwebtoken": "^9.0.2",
+    "morgan": "^1.10.0",
+    "mysql2": "^3.13.0"
+  }
+}
+
+================
+File: README.md
+================
+# review
+
+
+
+================================================================
+End of Codebase
+================================================================
