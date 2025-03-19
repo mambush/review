@@ -12,7 +12,7 @@ const Calendar = {
    */
   async addEvent(calendarData) {
     try {
-      // Define reminder settings JSON if provided
+      // Define reminder settings JSON if provi`ded
       let reminderSettings = null;
       if (calendarData.reminder_settings) {
         if (typeof calendarData.reminder_settings === 'string') {
