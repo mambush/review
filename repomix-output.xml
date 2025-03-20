@@ -43,8 +43,16 @@ The content is organized as follows:
 </file_summary>
 
 <directory_structure>
+.gitignore
 backend/.env
 backend/.gitignore
+backend/api/controllers/calendarController.js
+backend/api/controllers/categoryController.js
+backend/api/controllers/eventController.js
+backend/api/controllers/notificationController.js
+backend/api/controllers/recommendationController.js
+backend/api/controllers/reviewController.js
+backend/api/controllers/userController.js
 backend/api/middleware/auth.js
 backend/api/middleware/errorHandler.js
 backend/api/middleware/validation.js
@@ -55,11 +63,20 @@ backend/api/models/notificationModel.js
 backend/api/models/recommendationModel.js
 backend/api/models/reviewModel.js
 backend/api/models/userModel.js
+backend/api/routes/calendar.js
+backend/api/routes/categories.js
+backend/api/routes/events.js
+backend/api/routes/notifications.js
+backend/api/routes/recommendations.js
+backend/api/routes/reviews.js
+backend/api/routes/users.js
 backend/config/config.js
 backend/config/database.js
 backend/package.json
 backend/server.js
 backend/service/ai.service.js
+backend/service/emailService.js
+backend/service/uploadService.js
 backend/utils/helpers.js
 backend/utils/logger.js
 README.md
@@ -68,132 +85,9 @@ README.md
 <files>
 This section contains the contents of the repository's files.
 
-<file path="backend/.env">
-# Server Configuration
-PORT=3000
-NODE_ENV=development
-
-# Database Configuration
-DB_HOST=localhost
-DB_USER=root
-DB_PASS=Nyandana@23!
-DB_NAME=eventreviews
-
-# JWT Configuration
-JWT_SECRET=3d6f1a7e9c4b1e6e9f1a2c5b7d8e3a9f1c4b6d7e9f1a3b5c6d7e8f9a2b3c4d6
-JWT_EXPIRES_IN=24h
-
-# Claude AI API Configuration
-CLAUDE_API_KEY=your_claude_api_key
-CLAUDE_API_URL=https://api.anthropic.com/v1/messages
-
-# File Upload Configuration
-UPLOAD_PATH=./uploads
-MAX_FILE_SIZE=5242880
-
-# Email Configuration
-EMAIL_HOST=smtp.example.com
-EMAIL_PORT=587
-EMAIL_USER=siphelosp2nyands@gmail.com
-EMAIL_PASS=Nyandana@23!
-</file>
-
 <file path="backend/.gitignore">
 .qodo
 backend\node_modules
-</file>
-
-<file path="backend/api/middleware/auth.js">
-const jwt = require('jsonwebtoken');
-const config = require('../../config/config');
-const { ApiError } = require('./errorHandler');
-const db = require('../../config/database');
-
-/**
- * Middleware to protect routes that require authentication
- */
-exports.protect = async (req, res, next) => {
-  let token;
-
-  // Check if token exists in headers
-  if (req.headers.authorization && req.headers.authorization.startsWith('Bearer')) {
-    token = req.headers.authorization.split(' ')[1];
-  }
-
-  // Check if token exists
-  if (!token) {
-    return next(new ApiError('Not authorized to access this route', 401));
-  }
-
-  try {
-    // Verify token
-    const decoded = jwt.verify(token, config.app.jwtSecret);
-
-    // Check if user still exists
-    const [user] = await db.query(
-      'SELECT id, username, email, is_admin FROM users WHERE id = ?',
-      [decoded.id]
-    );
-
-    if (!user) {
-      return next(new ApiError('The user belonging to this token no longer exists', 401));
-    }
-
-    // Add user to request object
-    req.user = user;
-    next();
-  } catch (error) {
-    return next(new ApiError('Not authorized to access this route', 401));
-  }
-};
-
-/**
- * Middleware to restrict access to admin users
- */
-exports.admin = (req, res, next) => {
-  if (!req.user || !req.user.is_admin) {
-    return next(new ApiError('Access denied. Admin privileges required', 403));
-  }
-  next();
-};
-
-/**
- * Middleware to check if user can modify a resource
- * @param {string} model - The database model to check (e.g., 'events', 'reviews')
- * @param {string} paramName - The request parameter containing the resource ID (e.g., 'id')
- * @param {string} ownerField - The field in the model representing the owner (e.g., 'user_id', 'organizer_id')
- */
-exports.checkOwnership = (model, paramName, ownerField) => {
-  return async (req, res, next) => {
-    try {
-      // If user is admin, allow access
-      if (req.user.is_admin) {
-        return next();
-      }
-
-      const resourceId = req.params[paramName];
-      
-      // Check if resource exists and belongs to user
-      const [resource] = await db.query(
-        `SELECT ${ownerField} FROM ${model} WHERE id = ?`,
-        [resourceId]
-      );
-
-      if (!resource) {
-        return next(new ApiError(`${model.slice(0, -1)} not found`, 404));
-      }
-
-      // Check if user owns the resource
-      if (resource[ownerField] !== req.user.id) {
-        return next(new ApiError('Not authorized to modify this resource', 403));
-      }
-
-      next();
-    } catch (error) {
-      next(error);
-    }
-  };
-};
 </file>
 
 <file path="backend/api/middleware/errorHandler.js">
@@ -506,219 +400,6 @@ exports.paginationRules = [
     .isInt({ min: 1, max: 100 })
     .withMessage('Limit must be between 1 and 100')
 ];
-</file>
-
-<file path="backend/api/models/calendarModel.js">
-// calendarModel.js
-const db = require('../../config/database');
-
-/**
- * Calendar model
- */
-const Calendar = {
-  /**
-   * Add event to user's calendar
-   * @param {Object} calendarData - Calendar data
-   * @returns {Object} - Created calendar entry
-   */
-  async addEvent(calendarData) {
-    try {
-      // Define reminder settings JSON if provided
-      let reminderSettings = null;
-      if (calendarData.reminder_settings) {
-        if (typeof calendarData.reminder_settings === 'string') {
-          reminderSettings = calendarData.reminder_settings;
-        } else {
-          reminderSettings = JSON.stringify(calendarData.reminder_settings);
-        }
-      }
-
-      // Insert calendar entry into database
-      const result = await db.query(
-        `INSERT INTO calendars (user_id, event_id, reminder_settings, is_synced) VALUES (?, ?, ?, ?)`,
-        [
-          calendarData.user_id,
-          calendarData.event_id,
-          reminderSettings,
-          calendarData.is_synced || false
-        ]
-      );
-
-      // Get the created calendar entry
-      const [calendar] = await this.findById(result.insertId);
-      return calendar;
-    } catch (error) {
-      throw error;
-    }
-  },
-
-  /**
-   * Find calendar entry by ID
-   * @param {number} id - Calendar ID
-   * @returns {Object} - Calendar object
-   */
-  async findById(id) {
-    return await db.query(
-      `SELECT c.*, e.title as event_title, e.date as event_date, e.time as event_time
-       FROM calendars c
-       JOIN events e ON c.event_id = e.id
-       WHERE c.id = ?`,
-      [id]
-    );
-  },
-
-  /**
-   * Find calendar entry by user and event
-   * @param {number} userId - User ID
-   * @param {number} eventId - Event ID
-   * @returns {Object} - Calendar object
-   */
-  async findByUserAndEvent(userId, eventId) {
-    return await db.query(
-      `SELECT c.*, e.title as event_title, e.date as event_date, e.time as event_time
-       FROM calendars c
-       JOIN events e ON c.event_id = e.id
-       WHERE c.user_id = ? AND c.event_id = ?`,
-      [userId, eventId]
-    );
-  },
-
-  /**
-   * Update calendar entry
-   * @param {number} id - Calendar ID
-   * @param {Object} calendarData - Calendar data to update
-   * @returns {Object} - Updated calendar object
-   */
-  async update(id, calendarData) {
-    // Create dynamic update query based on provided fields
-    const fields = [];
-    const values = [];
-
-    if (calendarData.reminder_settings) {
-      let reminderSettings = null;
-      if (typeof calendarData.reminder_settings === 'string') {
-        reminderSettings = calendarData.reminder_settings;
-      } else {
-        reminderSettings = JSON.stringify(calendarData.reminder_settings);
-      }
-      
-      fields.push('reminder_settings = ?');
-      values.push(reminderSettings);
-    }
-    
-    if (calendarData.is_synced !== undefined) {
-      fields.push('is_synced = ?');
-      values.push(calendarData.is_synced);
-    }
-
-    // Only proceed if there are fields to update
-    if (fields.length === 0) {
-      return await this.findById(id);
-    }
-
-    // Add ID to values array
-    values.push(id);
-
-    // Execute update query
-    await db.query(
-      `UPDATE calendars SET ${fields.join(', ')} WHERE id = ?`,
-      values
-    );
-
-    // Return updated calendar entry
-    const [updatedCalendar] = await this.findById(id);
-    return updatedCalendar;
-  },
-
-  /**
-   * Remove event from user's calendar
-   * @param {number} id - Calendar ID
-   * @returns {boolean} - Success status
-   */
-  async removeEvent(id) {
-    const result = await db.query('DELETE FROM calendars WHERE id = ?', [id]);
-    return result.affectedRows > 0;
-  },
-
-  /**
-   * Get user's calendar events
-   * @param {number} userId - User ID
-   * @param {Object} options - Query options (limit, offset, filter)
-   * @returns {Array} - Array of calendar objects
-   */
-  async getUserEvents(userId, options = { limit: 10, offset: 0, filter: {} }) {
-    let query = `SELECT c.*, e.title, e.description, e.date, e.time, e.location, e.status, e.image
-                 FROM calendars c
-                 JOIN events e ON c.event_id = e.id
-                 WHERE c.user_id = ?`;
-    
-    const queryParams = [userId];
-    
-    // Add filter conditions
-    if (options.filter) {
-      if (options.filter.dateFrom) {
-        query += ' AND e.date >= ?';
-        queryParams.push(options.filter.dateFrom);
-      }
-      
-      if (options.filter.dateTo) {
-        query += ' AND e.date <= ?';
-        queryParams.push(options.filter.dateTo);
-      }
-      
-      if (options.filter.status) {
-        query += ' AND e.status = ?';
-        queryParams.push(options.filter.status);
-      }
-    }
-    
-    // Add sorting and pagination
-    query += ' ORDER BY e.date ASC, e.time ASC LIMIT ? OFFSET ?';
-    queryParams.push(options.limit, options.offset);
-    
-    return await db.query(query, queryParams);
-  },
-
-  /**
-   * Get upcoming events for reminder
-   * @param {number} minutesAhead - Minutes ahead to look for events
-   * @returns {Array} - Array of calendar objects with events coming up
-   */
-  async getUpcomingEvents(minutesAhead = 60) {
-    const now = new Date();
-    const targetDate = new Date(now.getTime() + minutesAhead * 60000);
-    
-    return await db.query(
-      `SELECT c.*, e.title, e.date, e.time, e.location, u.email as user_email, u.username as user_name
-       FROM calendars c
-       JOIN events e ON c.event_id = e.id
-       JOIN users u ON c.user_id = u.id
-       WHERE e.date = CURDATE() 
-       AND TIME_TO_SEC(TIMEDIFF(e.time, CURTIME())) BETWEEN 0 AND ?
-       AND JSON_EXTRACT(c.reminder_settings, '$.enabled') = TRUE`,
-      [minutesAhead * 60]
-    );
-  },
-
-  /**
-   * Check if user has added event to calendar
-   * @param {number} userId - User ID
-   * @param {number} eventId - Event ID
-   * @returns {boolean} - True if event is in user's calendar
-   */
-  async hasEvent(userId, eventId) {
-    const [result] = await db.query(
-      `SELECT COUNT(*) as count
-       FROM calendars
-       WHERE user_id = ? AND event_id = ?`,
-      [userId, eventId]
-    );
-    
-    return result.count > 0;
-  }
-};
-
-module.exports = Calendar;
 </file>
 
 <file path="backend/api/models/categoryModel.js">
@@ -2129,610 +1810,6 @@ const config = {
 module.exports = config;
 </file>
 
-<file path="backend/config/database.js">
-const mysql = require('mysql2/promise');
-const dotenv = require('dotenv');
-const { logger } = require('../utils/logger');
-
-dotenv.config();
-
-// Database connection pool configuration
-const pool = mysql.createPool({
-  host: process.env.DB_HOST || 'localhost',
-  user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASS || '',
-  database: process.env.DB_NAME || 'eventreviews',
-  waitForConnections: true,
-  connectionLimit: 10,
-  queueLimit: 0
-});
-
-// Test database connection
-async function testConnection() {
-  try {
-    const connection = await pool.getConnection();
-    logger.info('Database connection established successfully');
-    connection.release();
-    return true;
-  } catch (err) {
-    logger.error(`Database connection failed: ${err.message}`);
-    console.error('Database connection failed:', err);
-    return false;
-  }
-}
-
-// Initialize connection
-testConnection();
-
-module.exports = {
-  pool,
-  query: async (sql, params) => {
-    try {
-      const [results] = await pool.execute(sql, params);
-      return results;
-    } catch (error) {
-      logger.error(`DB Query Error: ${error.message}`);
-      throw error;
-    }
-  }
-};
-</file>
-
-<file path="backend/server.js">
-const express = require('express');
-const cors = require('cors');
-const helmet = require('helmet');
-const morgan = require('morgan');
-const path = require('path');
-const dotenv = require('dotenv');
-const { logger } = require('./utils/logger');
-const errorHandler = require('./api/middleware/errorHandler');
-
-// Load environment variables
-dotenv.config();
-
-// Initialize express app
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-// Database connection
-const dbConnection = require('./config/database');
-
-// Middleware
-app.use(helmet()); // Security headers
-app.use(cors()); // Enable CORS
-app.use(express.json()); // Parse JSON bodies
-app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
-app.use(morgan('dev')); // HTTP request logger
-
-// Static files
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
-
-// Routes
-app.use('/api/users', require('./api/routes/users'));
-app.use('/api/events', require('./api/routes/events'));
-app.use('/api/reviews', require('./api/routes/reviews'));
-app.use('/api/categories', require('./api/routes/categories'));
-app.use('/api/calendar', require('./api/routes/calendar'));
-app.use('/api/notifications', require('./api/routes/notifications'));
-app.use('/api/recommendations', require('./api/routes/recommendations'));
-
-// Root route
-app.get('/', (req, res) => {
-  res.json({ message: 'Welcome to the Event Reviews API' });
-});
-
-// Error handling middleware
-app.use(errorHandler);
-
-// Start the server
-app.listen(PORT, () => {
-  logger.info(`Server running on port ${PORT}`);
-  console.log(`Server running on port ${PORT}`);
-});
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (err) => {
-  logger.error(`Unhandled Rejection: ${err.message}`);
-  console.error('Unhandled Rejection:', err);
-  // Close server & exit process
-  // server.close(() => process.exit(1));
-});
-
-module.exports = app; // For testing
-</file>
-
-<file path="backend/service/ai.service.js">
-const axios = require('axios');
-const dotenv = require('dotenv');
-
-dotenv.config();
-
-// Claude AI API configuration
-const CLAUDE_API_KEY = process.env.CLAUDE_API_KEY;
-const CLAUDE_API_URL = process.env.CLAUDE_API_URL || 'https://api.anthropic.com/v1/messages';
-
-/**
- * Analyzes the sentiment of a review text using Claude AI
- * @param {string} text - The review text to analyze
- * @returns {Object} - Sentiment score and category
- */
-exports.analyzeSentiment = async (text) => {
-  try {
-    // Simple fallback if API key not configured
-    if (!CLAUDE_API_KEY) {
-      console.warn('Claude API key not configured. Using fallback sentiment analysis.');
-      return fallbackSentimentAnalysis(text);
-    }
-    
-    const response = await axios.post(
-      CLAUDE_API_URL,
-      {
-        model: "claude-3-haiku-20240307",
-        max_tokens: 100,
-        messages: [
-          {
-            role: "user",
-            content: `Analyze the sentiment of this event review. Return only a JSON object with a 'score' (number between 0 and 1, where 0 is very negative and 1 is very positive) and a 'category' (one of: 'positive', 'neutral', 'negative').
-            
-            Review: "${text}"
-            
-            Response format:
-            {
-              "score": 0.XX,
-              "category": "positive|neutral|negative"
-            }`
-          }
-        ]
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': CLAUDE_API_KEY,
-          'anthropic-version': '2023-06-01'
-        }
-      }
-    );
-    
-    // Extract the JSON from Claude's response
-    const content = response.data.content[0].text;
-    
-    // Parse the JSON response
-    try {
-      const parsedResult = JSON.parse(content);
-      return {
-        score: parsedResult.score,
-        category: parsedResult.category
-      };
-    } catch (parseError) {
-      console.error('Failed to parse Claude AI response:', parseError);
-      return fallbackSentimentAnalysis(text);
-    }
-  } catch (error) {
-    console.error('Claude API error:', error.response?.data || error.message);
-    return fallbackSentimentAnalysis(text);
-  }
-};
-
-/**
- * Simple fallback sentiment analysis for when API is not available
- * @param {string} text - The review text to analyze
- * @returns {Object} - Sentiment score and category
- */
-function fallbackSentimentAnalysis(text) {
-  const lowercaseText = text.toLowerCase();
-  
-  // Simple keyword-based sentiment analysis
-  const positiveWords = ['great', 'amazing', 'excellent', 'good', 'love', 'best', 'awesome', 'enjoyed', 'recommend', 'fantastic', 'wonderful'];
-  const negativeWords = ['bad', 'terrible', 'awful', 'poor', 'hate', 'worst', 'disappointed', 'waste', 'horrible', 'avoid'];
-  
-  let positiveCount = 0;
-  let negativeCount = 0;
-  
-  // Count positive and negative keywords
-  positiveWords.forEach(word => {
-    const regex = new RegExp(`\\b${word}\\b`, 'gi');
-    const matches = lowercaseText.match(regex);
-    if (matches) {
-      positiveCount += matches.length;
-    }
-  });
-  
-  negativeWords.forEach(word => {
-    const regex = new RegExp(`\\b${word}\\b`, 'gi');
-    const matches = lowercaseText.match(regex);
-    if (matches) {
-      negativeCount += matches.length;
-    }
-  });
-  
-  const totalWordCount = text.split(/\s+/).length;
-  let score;
-  let category;
-  
-  if (positiveCount > negativeCount) {
-    // More positive words than negative
-    score = 0.5 + (0.5 * (positiveCount / (positiveCount + negativeCount + 1)));
-    category = 'positive';
-  } else if (negativeCount > positiveCount) {
-    // More negative words than positive
-    score = 0.5 - (0.5 * (negativeCount / (positiveCount + negativeCount + 1)));
-    category = 'negative';
-  } else {
-    // Equal or no sentiment words
-    score = 0.5;
-    category = 'neutral';
-  }
-  
-  return { score, category };
-}
-
-/**
- * Generates review summaries for events
- * @param {Array} reviews - Array of review objects
- * @returns {Object} - Summary insights
- */
-exports.generateReviewSummary = async (reviews) => {
-  try {
-    if (!CLAUDE_API_KEY || reviews.length === 0) {
-      return {
-        averageRating: 0,
-        sentimentBreakdown: {
-          positive: 0,
-          neutral: 0,
-          negative: 0
-        },
-        summary: "No reviews available for summarization"
-      };
-    }
-
-    // Extract review texts to analyze
-    const reviewsText = reviews.map(review => {
-      return `Rating: ${review.rating}/5\nReview: ${review.content}`;
-    }).join("\n\n");
-
-    // Calculate average rating
-    const averageRating = reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length;
-
-    // Get sentiment breakdown
-    const sentimentBreakdown = {
-      positive: reviews.filter(r => r.sentiment_category === 'positive').length,
-      neutral: reviews.filter(r => r.sentiment_category === 'neutral').length,
-      negative: reviews.filter(r => r.sentiment_category === 'negative').length
-    };
-
-    // Generate summary using Claude
-    const response = await axios.post(
-      CLAUDE_API_URL,
-      {
-        model: "claude-3-haiku-20240307",
-        max_tokens: 300,
-        messages: [
-          {
-            role: "user",
-            content: `Analyze the following event reviews and provide a concise summary of common themes, standout positive points, and areas for improvement:
-
-            ${reviewsText}
-            
-            Format your response as a simple paragraph without using any special formatting or symbols.`
-          }
-        ]
-      },
-      {
-        headers: {
-          'Content-Type': 'application/json',
-          'x-api-key': CLAUDE_API_KEY,
-          'anthropic-version': '2023-06-01'
-        }
-      }
-    );
-
-    // Extract the summary text
-    const summaryText = response.data.content[0].text.trim();
-
-    return {
-      averageRating,
-      sentimentBreakdown,
-      summary: summaryText
-    };
-  } catch (error) {
-    console.error('Error generating review summary:', error.response?.data || error.message);
-    
-    // Fallback summary if API fails
-    const averageRating = reviews.length > 0 
-      ? reviews.reduce((sum, review) => sum + review.rating, 0) / reviews.length 
-      : 0;
-
-    const sentimentBreakdown = {
-      positive: reviews.filter(r => r.sentiment_category === 'positive').length,
-      neutral: reviews.filter(r => r.sentiment_category === 'neutral').length,
-      negative: reviews.filter(r => r.sentiment_category === 'negative').length
-    };
-
-    return {
-      averageRating,
-      sentimentBreakdown,
-      summary: "Unable to generate detailed summary. Please check the system logs for more information."
-    };
-  }
-};
-
-/**
- * Generates personalized event recommendations for users
- * @param {Object} user - User object
- * @param {Array} events - Available events
- * @param {Array} userReviews - User's past reviews
- * @returns {Array} - Recommended events with scores and reasons
- */
-exports.generateRecommendations = async (user, events, userReviews) => {
-  try {
-    if (!CLAUDE_API_KEY || events.length === 0) {
-      return generateFallbackRecommendations(user, events, userReviews);
-    }
-
-    // Get user preferences based on past reviews and behavior
-    const userPreferences = analyzeUserPreferences(userReviews);
-    
-    // Generate recommendations for each event
-    const recommendations = [];
-    
-    for (const event of events) {
-      // Calculate compatibility score between user and event
-      const score = calculateCompatibilityScore(event, userPreferences);
-      
-      // Generate reason for recommendation
-      const reason = generateRecommendationReason(event, userPreferences, score);
-      
-      recommendations.push({
-        eventId: event.id,
-        userId: user.id,
-        score,
-        reason
-      });
-    }
-    
-    // Sort by score (highest first) and return top recommendations
-    return recommendations
-      .sort((a, b) => b.score - a.score)
-      .slice(0, 5); // Return top 5 recommendations
-  } catch (error) {
-    console.error('Error generating recommendations:', error);
-    return generateFallbackRecommendations(user, events, userReviews);
-  }
-};
-
-/**
- * Analyzes user preferences based on reviews
- * @param {Array} userReviews - User's past reviews
- * @returns {Object} - User preferences
- */
-function analyzeUserPreferences(userReviews) {
-  // Default preferences
-  const preferences = {
-    categories: {},
-    avgRating: 0,
-    positiveKeywords: [],
-    negativeKeywords: []
-  };
-  
-  if (!userReviews || userReviews.length === 0) {
-    return preferences;
-  }
-  
-  // Extract category preferences
-  userReviews.forEach(review => {
-    if (review.event && review.event.categories) {
-      review.event.categories.forEach(category => {
-        if (!preferences.categories[category.id]) {
-          preferences.categories[category.id] = {
-            count: 0,
-            avgRating: 0
-          };
-        }
-        
-        preferences.categories[category.id].count++;
-        preferences.categories[category.id].avgRating += review.rating;
-      });
-    }
-  });
-  
-  // Calculate average rating per category
-  Object.keys(preferences.categories).forEach(categoryId => {
-    const category = preferences.categories[categoryId];
-    category.avgRating = category.avgRating / category.count;
-  });
-  
-  // Calculate overall average rating
-  preferences.avgRating = userReviews.reduce((sum, review) => sum + review.rating, 0) / userReviews.length;
-  
-  // Extract keywords from reviews
-  const allReviewText = userReviews.map(review => review.content).join(' ').toLowerCase();
-  
-  // Simple keyword extraction (can be improved)
-  const positiveKeywords = ['great', 'amazing', 'excellent', 'good', 'love', 'best', 'awesome', 'enjoyed'];
-  const negativeKeywords = ['bad', 'terrible', 'awful', 'poor', 'hate', 'worst', 'disappointed'];
-  
-  preferences.positiveKeywords = positiveKeywords.filter(word => allReviewText.includes(word));
-  preferences.negativeKeywords = negativeKeywords.filter(word => allReviewText.includes(word));
-  
-  return preferences;
-}
-
-/**
- * Calculates compatibility score between event and user preferences
- * @param {Object} event - Event object
- * @param {Object} preferences - User preferences
- * @returns {Number} - Compatibility score (0-1)
- */
-function calculateCompatibilityScore(event, preferences) {
-  let score = 0.5; // Default neutral score
-  
-  // Category match
-  let categoryScore = 0;
-  if (event.categories && event.categories.length > 0) {
-    event.categories.forEach(category => {
-      if (preferences.categories[category.id]) {
-        const catPref = preferences.categories[category.id];
-        categoryScore += (catPref.avgRating / 5) * (catPref.count / 10);
-      }
-    });
-    
-    categoryScore = Math.min(categoryScore, 1) / event.categories.length;
-    score += categoryScore * 0.4; // Category match is 40% of total score
-  }
-  
-  // Rating match (how close is the event rating to user's average preferred rating)
-  const ratingDiff = Math.abs(event.avg_rating - preferences.avgRating);
-  const ratingScore = 1 - (ratingDiff / 5);
-  score += ratingScore * 0.3; // Rating match is 30% of total score
-  
-  // Keyword match in event description
-  const eventText = (event.title + ' ' + event.description).toLowerCase();
-  let keywordScore = 0;
-  
-  preferences.positiveKeywords.forEach(keyword => {
-    if (eventText.includes(keyword)) {
-      keywordScore += 0.1;
-    }
-  });
-  
-  preferences.negativeKeywords.forEach(keyword => {
-    if (eventText.includes(keyword)) {
-      keywordScore -= 0.1;
-    }
-  });
-  
-  keywordScore = Math.max(-1, Math.min(1, keywordScore));
-  score += (keywordScore + 1) / 2 * 0.3; // Normalize to 0-1 and account for 30% of score
-  
-  // Ensure score is between 0 and 1
-  return Math.max(0, Math.min(1, score));
-}
-
-/**
- * Generates a reason for recommending an event
- * @param {Object} event - Event object
- * @param {Object} preferences - User preferences
- * @param {Number} score - Compatibility score
- * @returns {String} - Recommendation reason
- */
-function generateRecommendationReason(event, preferences, score) {
-  // Default reasons based on score ranges
-  if (score > 0.8) {
-    return `Highly matches your interests based on your ratings and reviews`;
-  } else if (score > 0.6) {
-    return `Similar to events you've enjoyed in the past`;
-  } else if (score > 0.4) {
-    return `You might find this event interesting`;
-  } else {
-    return `This event offers something different from your usual preferences`;
-  }
-}
-
-/**
- * Generates fallback recommendations when AI API is not available
- * @param {Object} user - User object
- * @param {Array} events - Available events
- * @param {Array} userReviews - User's past reviews
- * @returns {Array} - Basic recommended events
- */
-function generateFallbackRecommendations(user, events, userReviews) {
-  // Simple recommendation logic: sort by highest rated events
-  return events
-    .slice(0, 10)
-    .map(event => ({
-      eventId: event.id,
-      userId: user.id,
-      score: event.avg_rating / 5, // Normalize to 0-1
-      reason: "Based on event popularity and rating"
-    }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, 5); // Return top 5
-}
-
-/**
- * Updates the database with sentiment analysis results
- * @param {Object} db - Database connection
- * @param {number} reviewId - Review ID
- * @param {Object} sentiment - Sentiment analysis results
- * @returns {boolean} - Success status
- */
-exports.updateReviewSentiment = async (db, reviewId, sentiment) => {
-  try {
-    await db.query(
-      'UPDATE reviews SET sentiment_score = ?, sentiment_category = ?, updated_at = NOW() WHERE id = ?',
-      [sentiment.score, sentiment.category, reviewId]
-    );
-    
-    console.log(`Updated sentiment for review #${reviewId}: ${sentiment.category} (${sentiment.score})`);
-    return true;
-  } catch (error) {
-    console.error(`Failed to update sentiment for review #${reviewId}:`, error);
-    return false;
-  }
-};
-
-/**
- * Processes batch sentiment analysis for multiple reviews
- * @param {Object} db - Database connection
- * @param {Array} reviews - Array of review objects
- * @returns {Object} - Processing results with success count
- */
-exports.processBatchSentimentAnalysis = async (db, reviews) => {
-  const results = {
-    total: reviews.length,
-    success: 0,
-    failed: 0,
-    details: []
-  };
-  
-  for (const review of reviews) {
-    try {
-      // Skip reviews that already have sentiment analysis
-      if (review.sentiment_score !== null && review.sentiment_category !== null) {
-        results.details.push({
-          reviewId: review.id,
-          status: 'skipped',
-          message: 'Sentiment already analyzed'
-        });
-        continue;
-      }
-      
-      // Analyze sentiment
-      const sentiment = await exports.analyzeSentiment(review.content);
-      
-      // Update database
-      const success = await exports.updateReviewSentiment(db, review.id, sentiment);
-      
-      if (success) {
-        results.success++;
-        results.details.push({
-          reviewId: review.id,
-          status: 'success',
-          sentiment
-        });
-      } else {
-        results.failed++;
-        results.details.push({
-          reviewId: review.id,
-          status: 'failed',
-          message: 'Database update failed'
-        });
-      }
-    } catch (error) {
-      results.failed++;
-      results.details.push({
-        reviewId: review.id,
-        status: 'error',
-        message: error.message
-      });
-    }
-  }
-  
-  return results;
-};
-</file>
-
 <file path="backend/utils/helpers.js">
 /**
  * Collection of helper functions for the application
@@ -2845,39 +1922,3993 @@ const formatDate = (date) => {
   };
 </file>
 
-<file path="backend/utils/logger.js">
-const winston = require('winston');
-const path = require('path');
+<file path="README.md">
+# review
+</file>
 
-// Define log format
-const logFormat = winston.format.combine(
-  winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-  winston.format.errors({ stack: true }),
-  winston.format.splat(),
-  winston.format.json()
+<file path="backend/.env">
+# Server configuration
+PORT=5000
+NODE_ENV=development
+
+# Database configuration
+DB_HOST=localhost
+DB_USER=root
+DB_PASSWORD=Nyandana@23!
+DB_NAME=eventreviews
+
+# JWT configuration
+JWT_SECRET=your_jwt_secret_here
+JWT_EXPIRES_IN=30d
+
+# File upload configuration
+UPLOAD_DIR=uploads
+
+# Logging configuration
+LOG_LEVEL=info
+
+# Claude AI API Configuration
+CLAUDE_API_KEY=your_claude_api_key
+CLAUDE_API_URL=https://api.anthropic.com/v1/messages
+
+# File Upload Configuration
+UPLOAD_PATH=./uploads
+MAX_FILE_SIZE=5242880
+
+# Email Configuration
+EMAIL_HOST=smtp.example.com
+EMAIL_PORT=587
+EMAIL_USER=siphelosp2nyands@gmail.com
+EMAIL_PASS=Nyandana@23!
+</file>
+
+<file path="backend/api/controllers/calendarController.js">
+const db = require('../../config/database');
+const logger = require('../../utils/logger');
+
+/**
+ * Get all calendar entries for a user
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.getUserCalendarEntries = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    const query = `
+      SELECT c.*, e.title, e.description, e.date, e.time, e.location, e.status
+      FROM calendars c
+      JOIN events e ON c.event_id = e.id
+      WHERE c.user_id = ?
+      ORDER BY e.date, e.time
+    `;
+    
+    const [entries] = await db.query(query, [userId]);
+    
+    return res.status(200).json({
+      success: true,
+      count: entries.length,
+      data: entries
+    });
+  } catch (error) {
+    logger.error(`Error getting user calendar entries: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+
+/**
+ * Add an event to user's calendar
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.addToCalendar = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { event_id, reminder_settings, is_synced } = req.body;
+    
+    if (!event_id) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide event ID'
+      });
+    }
+    
+    // Check if event exists
+    const [event] = await db.query('SELECT * FROM events WHERE id = ?', [event_id]);
+    
+    if (event.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Event not found'
+      });
+    }
+    
+    // Check if already added to calendar
+    const [existing] = await db.query(
+      'SELECT * FROM calendars WHERE user_id = ? AND event_id = ?',
+      [userId, event_id]
+    );
+    
+    if (existing.length > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Event already added to calendar'
+      });
+    }
+    
+    // Default reminder settings if not provided
+    const defaultReminderSettings = JSON.stringify({
+      remind: true,
+      time: 60, // minutes before event
+      method: "email"
+    });
+    
+    const reminderJSON = reminder_settings 
+      ? JSON.stringify(reminder_settings) 
+      : defaultReminderSettings;
+    
+    const syncStatus = is_synced !== undefined ? is_synced : false;
+    
+    const query = `
+      INSERT INTO calendars (user_id, event_id, reminder_settings, is_synced)
+      VALUES (?, ?, ?, ?)
+    `;
+    
+    const [result] = await db.query(query, [
+      userId, 
+      event_id, 
+      reminderJSON, 
+      syncStatus
+    ]);
+    
+    if (result.affectedRows === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Could not add event to calendar'
+      });
+    }
+    
+    const [newEntry] = await db.query(
+      'SELECT * FROM calendars WHERE id = ?',
+      [result.insertId]
+    );
+    
+    return res.status(201).json({
+      success: true,
+      data: newEntry[0]
+    });
+  } catch (error) {
+    logger.error(`Error adding event to calendar: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+
+/**
+ * Update calendar entry reminder settings
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.updateReminderSettings = async (req, res) => {
+  try {
+    const calendarId = req.params.id;
+    const userId = req.user.id;
+    const { reminder_settings } = req.body;
+    
+    if (!reminder_settings) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide reminder settings'
+      });
+    }
+    
+    // Verify calendar entry belongs to user
+    const [entry] = await db.query(
+      'SELECT * FROM calendars WHERE id = ? AND user_id = ?',
+      [calendarId, userId]
+    );
+    
+    if (entry.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Calendar entry not found or does not belong to user'
+      });
+    }
+    
+    const reminderJSON = JSON.stringify(reminder_settings);
+    
+    const query = `
+      UPDATE calendars
+      SET reminder_settings = ?
+      WHERE id = ?
+    `;
+    
+    await db.query(query, [reminderJSON, calendarId]);
+    
+    const [updated] = await db.query(
+      'SELECT * FROM calendars WHERE id = ?',
+      [calendarId]
+    );
+    
+    return res.status(200).json({
+      success: true,
+      data: updated[0]
+    });
+  } catch (error) {
+    logger.error(`Error updating reminder settings: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+
+/**
+ * Update sync status of calendar entry
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.updateSyncStatus = async (req, res) => {
+  try {
+    const calendarId = req.params.id;
+    const userId = req.user.id;
+    const { is_synced } = req.body;
+    
+    if (is_synced === undefined) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide sync status'
+      });
+    }
+    
+    // Verify calendar entry belongs to user
+    const [entry] = await db.query(
+      'SELECT * FROM calendars WHERE id = ? AND user_id = ?',
+      [calendarId, userId]
+    );
+    
+    if (entry.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Calendar entry not found or does not belong to user'
+      });
+    }
+    
+    const query = `
+      UPDATE calendars
+      SET is_synced = ?
+      WHERE id = ?
+    `;
+    
+    await db.query(query, [is_synced, calendarId]);
+    
+    return res.status(200).json({
+      success: true,
+      message: `Calendar entry sync status updated to ${is_synced}`
+    });
+  } catch (error) {
+    logger.error(`Error updating sync status: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+
+/**
+ * Remove event from user's calendar
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.removeFromCalendar = async (req, res) => {
+  try {
+    const calendarId = req.params.id;
+    const userId = req.user.id;
+    
+    // Verify calendar entry belongs to user
+    const [entry] = await db.query(
+      'SELECT * FROM calendars WHERE id = ? AND user_id = ?',
+      [calendarId, userId]
+    );
+    
+    if (entry.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Calendar entry not found or does not belong to user'
+      });
+    }
+    
+    await db.query('DELETE FROM calendars WHERE id = ?', [calendarId]);
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Event removed from calendar'
+    });
+  } catch (error) {
+    logger.error(`Error removing event from calendar: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+
+/**
+ * Get upcoming events from user's calendar
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.getUpcomingEvents = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { days = 7 } = req.query; // Default to 7 days ahead
+    
+    const query = `
+      SELECT c.*, e.title, e.description, e.date, e.time, e.location, e.status
+      FROM calendars c
+      JOIN events e ON c.event_id = e.id
+      WHERE c.user_id = ? 
+      AND e.date BETWEEN CURDATE() AND DATE_ADD(CURDATE(), INTERVAL ? DAY)
+      ORDER BY e.date, e.time
+    `;
+    
+    const [events] = await db.query(query, [userId, parseInt(days)]);
+    
+    return res.status(200).json({
+      success: true,
+      count: events.length,
+      data: events
+    });
+  } catch (error) {
+    logger.error(`Error getting upcoming events: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+</file>
+
+<file path="backend/api/controllers/categoryController.js">
+const db = require('../../config/database');
+
+exports.createCategory = async (req, res) => {
+  try {
+    // Only admins can create categories
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+    
+    const { name, description } = req.body;
+    
+    // Check if category already exists
+    const [existingCategories] = await db.query(
+      'SELECT * FROM categories WHERE name = ?',
+      [name]
+    );
+    
+    if (existingCategories.length > 0) {
+      return res.status(400).json({ message: 'Category already exists' });
+    }
+    
+    // Insert new category
+    const [result] = await db.query(
+      'INSERT INTO categories (name, description) VALUES (?, ?)',
+      [name, description || null]
+    );
+    
+    res.status(201).json({
+      id: result.insertId,
+      name,
+      description,
+      message: 'Category created successfully'
+    });
+  } catch (error) {
+    console.error('Create category error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.getAllCategories = async (req, res) => {
+  try {
+    // Get query parameters
+    const { search, sort = 'name', order = 'asc' } = req.query;
+    
+    let query = 'SELECT * FROM categories';
+    let params = [];
+    
+    // Add search filter if provided
+    if (search) {
+      query += ' WHERE name LIKE ? OR description LIKE ?';
+      const searchParam = `%${search}%`;
+      params.push(searchParam, searchParam);
+    }
+    
+    // Add sorting
+    const validSortFields = ['name', 'created_at'];
+    const validOrders = ['asc', 'desc'];
+    
+    const sortField = validSortFields.includes(sort) ? sort : 'name';
+    const sortOrder = validOrders.includes(order.toLowerCase()) ? order : 'asc';
+    
+    query += ` ORDER BY ${sortField} ${sortOrder}`;
+    
+    // Execute query
+    const [categories] = await db.query(query, params);
+    
+    // Get event count for each category
+    for (const category of categories) {
+      const [countResult] = await db.query(`
+        SELECT COUNT(*) as event_count
+        FROM event_categories
+        WHERE category_id = ?
+      `, [category.id]);
+      
+      category.eventCount = countResult[0].event_count;
+    }
+    
+    res.json(categories);
+  } catch (error) {
+    console.error('Get all categories error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.getCategoryById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Get category
+    const [categories] = await db.query('SELECT * FROM categories WHERE id = ?', [id]);
+    
+    if (categories.length === 0) {
+      return res.status(404).json({ message: 'Category not found' });
+    }
+    
+    const category = categories[0];
+    
+    // Get event count for category
+    const [countResult] = await db.query(
+      'SELECT COUNT(*) as event_count FROM event_categories WHERE category_id = ?',
+      [id]
+    );
+    
+    category.eventCount = countResult[0].event_count;
+    
+    res.json(category);
+  } catch (error) {
+    console.error('Get category error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.updateCategory = async (req, res) => {
+  try {
+    // Only admins can update categories
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+    
+    const { id } = req.params;
+    const { name, description } = req.body;
+    
+    // Check if category exists
+    const [categories] = await db.query('SELECT * FROM categories WHERE id = ?', [id]);
+    
+    if (categories.length === 0) {
+      return res.status(404).json({ message: 'Category not found' });
+    }
+    
+    // Check if name already exists for another category
+    if (name) {
+      const [existingCategories] = await db.query(
+        'SELECT * FROM categories WHERE name = ? AND id != ?',
+        [name, id]
+      );
+      
+      if (existingCategories.length > 0) {
+        return res.status(400).json({ message: 'Category name already exists' });
+      }
+    }
+    
+    // Construct update query dynamically
+    let updateFields = [];
+    let queryParams = [];
+    
+    if (name) {
+      updateFields.push('name = ?');
+      queryParams.push(name);
+    }
+    
+    if (description !== undefined) {
+      updateFields.push('description = ?');
+      queryParams.push(description);
+    }
+    
+    if (updateFields.length === 0) {
+      return res.status(400).json({ message: 'No fields to update' });
+    }
+    
+    // Add category ID to params
+    queryParams.push(id);
+    
+    const query = `UPDATE categories SET ${updateFields.join(', ')} WHERE id = ?`;
+    
+    await db.query(query, queryParams);
+    
+    res.json({ message: 'Category updated successfully' });
+  } catch (error) {
+    console.error('Update category error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.deleteCategory = async (req, res) => {
+  try {
+    // Only admins can delete categories
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+    
+    const { id } = req.params;
+    
+    // Check if category exists
+    const [categories] = await db.query('SELECT * FROM categories WHERE id = ?', [id]);
+    
+    if (categories.length === 0) {
+      return res.status(404).json({ message: 'Category not found' });
+    }
+    
+    // Delete category - cascade will handle related records
+    await db.query('DELETE FROM categories WHERE id = ?', [id]);
+    
+    res.json({ message: 'Category deleted successfully' });
+  } catch (error) {
+    console.error('Delete category error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.getCategoryEvents = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { page = 1, limit = 10, status } = req.query;
+    
+    // Check if category exists
+    const [categories] = await db.query('SELECT * FROM categories WHERE id = ?', [id]);
+    
+    if (categories.length === 0) {
+      return res.status(404).json({ message: 'Category not found' });
+    }
+    
+    // Calculate offset for pagination
+    const offset = (page - 1) * limit;
+    
+    // Build query
+    let query = `
+      SELECT e.*, u.username as organizer_name
+      FROM events e
+      JOIN event_categories ec ON e.id = ec.event_id
+      JOIN users u ON e.organizer_id = u.id
+      WHERE ec.category_id = ?
+    `;
+    
+    let countQuery = `
+      SELECT COUNT(*) as total
+      FROM events e
+      JOIN event_categories ec ON e.id = ec.event_id
+      WHERE ec.category_id = ?
+    `;
+    
+    const queryParams = [id];
+    
+    // Add status filter if provided
+    if (status) {
+      query += ' AND e.status = ?';
+      countQuery += ' AND e.status = ?';
+      queryParams.push(status);
+    }
+    
+    // Add sorting and pagination
+    query += ' ORDER BY e.date DESC LIMIT ? OFFSET ?';
+    queryParams.push(parseInt(limit), parseInt(offset));
+    
+    // Execute queries
+    const [events] = await db.query(query, queryParams);
+    const [countResult] = await db.query(countQuery, queryParams.slice(0, status ? 2 : 1));
+    
+    const total = countResult[0].total;
+    
+    res.json({
+      events,
+      pagination: {
+        total,
+        page: parseInt(page),
+        pageSize: parseInt(limit),
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Get category events error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+</file>
+
+<file path="backend/api/controllers/eventController.js">
+const db = require('../../config/database');
+
+exports.createEvent = async (req, res) => {
+  try {
+    const { title, description, date, time, location, categoryIds } = req.body;
+    const organizerId = req.user.id;
+    let image = null;
+    
+    // If there's an image upload, get the path
+    if (req.file) {
+      image = req.file.path;
+    }
+    
+    const connection = await db.getConnection();
+    
+    try {
+      await connection.beginTransaction();
+      
+      // Insert event
+      const [eventResult] = await connection.query(
+        'INSERT INTO events (title, description, date, time, location, organizer_id, image) VALUES (?, ?, ?, ?, ?, ?, ?)',
+        [title, description, date, time, location, organizerId, image]
+      );
+      
+      const eventId = eventResult.insertId;
+      
+      // Insert event categories if provided
+      if (categoryIds && Array.isArray(categoryIds) && categoryIds.length > 0) {
+        const categoryValues = categoryIds.map(categoryId => [eventId, categoryId]);
+        await connection.query(
+          'INSERT INTO event_categories (event_id, category_id) VALUES ?',
+          [categoryValues]
+        );
+      }
+      
+      await connection.commit();
+      
+      res.status(201).json({
+        id: eventId,
+        title,
+        description,
+        date,
+        time,
+        location,
+        organizerId,
+        image,
+        status: 'upcoming',
+        avgRating: 0,
+        message: 'Event created successfully'
+      });
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    console.error('Create event error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.getAllEvents = async (req, res) => {
+  try {
+    const { 
+      category, 
+      status, 
+      organizer, 
+      search,
+      sortBy = 'date', 
+      sortDir = 'asc',
+      page = 1,
+      limit = 10
+    } = req.query;
+    
+    let query = `
+      SELECT e.*, u.username as organizer_name
+      FROM events e
+      JOIN users u ON e.organizer_id = u.id
+    `;
+    
+    let countQuery = 'SELECT COUNT(*) as total FROM events e';
+    let whereConditions = [];
+    let params = [];
+    
+    // Add category filter if provided
+    if (category) {
+      query += ' JOIN event_categories ec ON e.id = ec.event_id';
+      countQuery += ' JOIN event_categories ec ON e.id = ec.event_id';
+      whereConditions.push('ec.category_id = ?');
+      params.push(category);
+    }
+    
+    // Add status filter if provided
+    if (status) {
+      whereConditions.push('e.status = ?');
+      params.push(status);
+    }
+    
+    // Add organizer filter if provided
+    if (organizer) {
+      whereConditions.push('e.organizer_id = ?');
+      params.push(organizer);
+    }
+    
+    // Add search filter if provided
+    if (search) {
+      whereConditions.push('(e.title LIKE ? OR e.description LIKE ? OR e.location LIKE ?)');
+      const searchParam = `%${search}%`;
+      params.push(searchParam, searchParam, searchParam);
+    }
+    
+    // Add WHERE clause if conditions exist
+    if (whereConditions.length > 0) {
+      query += ' WHERE ' + whereConditions.join(' AND ');
+      countQuery += ' WHERE ' + whereConditions.join(' AND ');
+    }
+    
+    // Add GROUP BY to handle joins causing duplicate rows
+    query += ' GROUP BY e.id';
+    
+    // Add sorting
+    const validSortFields = ['date', 'title', 'avg_rating', 'created_at'];
+    const validSortDirs = ['asc', 'desc'];
+    
+    const sortField = validSortFields.includes(sortBy) ? sortBy : 'date';
+    const sortDirection = validSortDirs.includes(sortDir.toLowerCase()) ? sortDir : 'asc';
+    
+    query += ` ORDER BY e.${sortField} ${sortDirection}`;
+    
+    // Add pagination
+    const offset = (page - 1) * limit;
+    query += ' LIMIT ? OFFSET ?';
+    params.push(parseInt(limit), parseInt(offset));
+    
+    // Execute queries
+    const [events] = await db.query(query, params);
+    const [countResult] = await db.query(countQuery, params.slice(0, params.length - 2));
+    
+    // Get categories for each event
+    for (const event of events) {
+      const [categories] = await db.query(`
+        SELECT c.id, c.name
+        FROM categories c
+        JOIN event_categories ec ON c.id = ec.category_id
+        WHERE ec.event_id = ?
+      `, [event.id]);
+      
+      event.categories = categories;
+    }
+    
+    const total = countResult[0].total;
+    
+    res.json({
+      events,
+      pagination: {
+        total,
+        page: parseInt(page),
+        pageSize: parseInt(limit),
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Get all events error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.getEventById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Get event details
+    const [events] = await db.query(`
+      SELECT e.*, u.username as organizer_name
+      FROM events e
+      JOIN users u ON e.organizer_id = u.id
+      WHERE e.id = ?
+    `, [id]);
+    
+    if (events.length === 0) {
+      return res.status(404).json({ message: 'Event not found' });
+    }
+    
+    const event = events[0];
+    
+    // Get event categories
+    const [categories] = await db.query(`
+      SELECT c.id, c.name
+      FROM categories c
+      JOIN event_categories ec ON c.id = ec.category_id
+      WHERE ec.event_id = ?
+    `, [id]);
+    
+    event.categories = categories;
+    
+    // Get review stats
+    const [reviewStats] = await db.query(`
+      SELECT 
+        COUNT(*) as total_reviews,
+        AVG(rating) as average_rating,
+        COUNT(CASE WHEN sentiment_category = 'positive' THEN 1 END) as positive_reviews,
+        COUNT(CASE WHEN sentiment_category = 'neutral' THEN 1 END) as neutral_reviews,
+        COUNT(CASE WHEN sentiment_category = 'negative' THEN 1 END) as negative_reviews
+      FROM reviews
+      WHERE event_id = ?
+    `, [id]);
+    
+    event.reviewStats = reviewStats[0];
+    
+    res.json(event);
+  } catch (error) {
+    console.error('Get event error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.updateEvent = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { title, description, date, time, location, status, categoryIds } = req.body;
+    let image = null;
+    
+    // If there's an image upload, get the path
+    if (req.file) {
+      image = req.file.path;
+    }
+    
+    // Check if event exists and user is organizer or admin
+    const [events] = await db.query('SELECT * FROM events WHERE id = ?', [id]);
+    
+    if (events.length === 0) {
+      return res.status(404).json({ message: 'Event not found' });
+    }
+    
+    if (events[0].organizer_id !== req.user.id && !req.user.isAdmin) {
+      return res.status(403).json({ message: 'Not authorized to update this event' });
+    }
+    
+    const connection = await db.getConnection();
+    
+    try {
+      await connection.beginTransaction();
+      
+      // Construct update query dynamically
+      let updateFields = [];
+      let queryParams = [];
+      
+      if (title) {
+        updateFields.push('title = ?');
+        queryParams.push(title);
+      }
+      
+      if (description !== undefined) {
+        updateFields.push('description = ?');
+        queryParams.push(description);
+      }
+      
+      if (date) {
+        updateFields.push('date = ?');
+        queryParams.push(date);
+      }
+      
+      if (time) {
+        updateFields.push('time = ?');
+        queryParams.push(time);
+      }
+      
+      if (location) {
+        updateFields.push('location = ?');
+        queryParams.push(location);
+      }
+      
+      if (status) {
+        updateFields.push('status = ?');
+        queryParams.push(status);
+      }
+      
+      if (image) {
+        updateFields.push('image = ?');
+        queryParams.push(image);
+      }
+      
+      if (updateFields.length > 0) {
+        // Add event ID to params
+        queryParams.push(id);
+        
+        const query = `UPDATE events SET ${updateFields.join(', ')} WHERE id = ?`;
+        await connection.query(query, queryParams);
+      }
+      
+      // Update categories if provided
+      if (categoryIds && Array.isArray(categoryIds)) {
+        // Delete existing categories
+        await connection.query('DELETE FROM event_categories WHERE event_id = ?', [id]);
+        
+        // Insert new categories
+        if (categoryIds.length > 0) {
+          const categoryValues = categoryIds.map(categoryId => [id, categoryId]);
+          await connection.query(
+            'INSERT INTO event_categories (event_id, category_id) VALUES ?',
+            [categoryValues]
+          );
+        }
+      }
+      
+      await connection.commit();
+      
+      res.json({ message: 'Event updated successfully' });
+    } catch (error) {
+      await connection.rollback();
+      throw error;
+    } finally {
+      connection.release();
+    }
+  } catch (error) {
+    console.error('Update event error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.deleteEvent = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Check if event exists and user is organizer or admin
+    const [events] = await db.query('SELECT * FROM events WHERE id = ?', [id]);
+    
+    if (events.length === 0) {
+      return res.status(404).json({ message: 'Event not found' });
+    }
+    
+    if (events[0].organizer_id !== req.user.id && !req.user.isAdmin) {
+      return res.status(403).json({ message: 'Not authorized to delete this event' });
+    }
+    
+    // Delete event - cascade will handle related records
+    await db.query('DELETE FROM events WHERE id = ?', [id]);
+    
+    res.json({ message: 'Event deleted successfully' });
+  } catch (error) {
+    console.error('Delete event error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.getUserEvents = async (req, res) => {
+  try {
+    const userId = req.params.userId || req.user.id;
+    
+    const [events] = await db.query(`
+      SELECT e.*, u.username as organizer_name
+      FROM events e
+      JOIN users u ON e.organizer_id = u.id
+      WHERE e.organizer_id = ?
+      ORDER BY e.date DESC
+    `, [userId]);
+    
+    // Get categories for each event
+    for (const event of events) {
+      const [categories] = await db.query(`
+        SELECT c.id, c.name
+        FROM categories c
+        JOIN event_categories ec ON c.id = ec.category_id
+        WHERE ec.event_id = ?
+      `, [event.id]);
+      
+      event.categories = categories;
+    }
+    
+    res.json(events);
+  } catch (error) {
+    console.error('Get user events error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.updateEventStatus = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+    
+    if (!['upcoming', 'ongoing', 'completed', 'cancelled'].includes(status)) {
+      return res.status(400).json({ message: 'Invalid status' });
+    }
+    
+    // Check if event exists and user is organizer or admin
+    const [events] = await db.query('SELECT * FROM events WHERE id = ?', [id]);
+    
+    if (events.length === 0) {
+      return res.status(404).json({ message: 'Event not found' });
+    }
+    
+    if (events[0].organizer_id !== req.user.id && !req.user.isAdmin) {
+      return res.status(403).json({ message: 'Not authorized to update this event' });
+    }
+    
+    // Update status
+    await db.query('UPDATE events SET status = ? WHERE id = ?', [status, id]);
+    
+    res.json({ message: 'Event status updated successfully' });
+  } catch (error) {
+    console.error('Update event status error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+</file>
+
+<file path="backend/api/controllers/notificationController.js">
+const db = require('../../config/database');
+const logger = require('../../utils/logger');
+
+/**
+ * Get all notifications for a specific user
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.getUserNotifications = async (req, res) => {
+  try {
+    const userId = req.user.id; // Assuming auth middleware adds user to req
+    const query = `
+      SELECT * FROM notifications 
+      WHERE user_id = ? 
+      ORDER BY created_at DESC
+    `;
+    
+    const [notifications] = await db.query(query, [userId]);
+    
+    return res.status(200).json({
+      success: true,
+      count: notifications.length,
+      data: notifications
+    });
+  } catch (error) {
+    logger.error(`Error getting user notifications: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+
+/**
+ * Get unread notifications count for a user
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.getUnreadCount = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const query = `
+      SELECT COUNT(*) as unreadCount 
+      FROM notifications 
+      WHERE user_id = ? AND read_status = FALSE
+    `;
+    
+    const [result] = await db.query(query, [userId]);
+    
+    return res.status(200).json({
+      success: true,
+      unreadCount: result[0].unreadCount
+    });
+  } catch (error) {
+    logger.error(`Error getting unread notification count: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+
+/**
+ * Create a new notification
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.createNotification = async (req, res) => {
+  try {
+    const { user_id, content, type, related_id } = req.body;
+    
+    if (!user_id || !content || !type) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide all required fields'
+      });
+    }
+    
+    const query = `
+      INSERT INTO notifications (user_id, content, type, related_id)
+      VALUES (?, ?, ?, ?)
+    `;
+    
+    const [result] = await db.query(query, [user_id, content, type, related_id || null]);
+    
+    if (result.affectedRows === 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Notification could not be created'
+      });
+    }
+    
+    const [newNotification] = await db.query(
+      'SELECT * FROM notifications WHERE id = ?',
+      [result.insertId]
+    );
+    
+    return res.status(201).json({
+      success: true,
+      data: newNotification[0]
+    });
+  } catch (error) {
+    logger.error(`Error creating notification: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+
+/**
+ * Mark a notification as read
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.markAsRead = async (req, res) => {
+  try {
+    const notificationId = req.params.id;
+    const userId = req.user.id;
+    
+    // Verify notification belongs to the user
+    const [notification] = await db.query(
+      'SELECT * FROM notifications WHERE id = ? AND user_id = ?',
+      [notificationId, userId]
+    );
+    
+    if (notification.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Notification not found or does not belong to user'
+      });
+    }
+    
+    const query = `
+      UPDATE notifications 
+      SET read_status = TRUE 
+      WHERE id = ?
+    `;
+    
+    await db.query(query, [notificationId]);
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Notification marked as read'
+    });
+  } catch (error) {
+    logger.error(`Error marking notification as read: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+
+/**
+ * Mark all notifications as read for a user
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.markAllAsRead = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    const query = `
+      UPDATE notifications 
+      SET read_status = TRUE 
+      WHERE user_id = ? AND read_status = FALSE
+    `;
+    
+    const [result] = await db.query(query, [userId]);
+    
+    return res.status(200).json({
+      success: true,
+      message: `${result.affectedRows} notifications marked as read`
+    });
+  } catch (error) {
+    logger.error(`Error marking all notifications as read: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+
+/**
+ * Delete a notification
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.deleteNotification = async (req, res) => {
+  try {
+    const notificationId = req.params.id;
+    const userId = req.user.id;
+    
+    // Verify notification belongs to the user
+    const [notification] = await db.query(
+      'SELECT * FROM notifications WHERE id = ? AND user_id = ?',
+      [notificationId, userId]
+    );
+    
+    if (notification.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Notification not found or does not belong to user'
+      });
+    }
+    
+    await db.query('DELETE FROM notifications WHERE id = ?', [notificationId]);
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Notification deleted successfully'
+    });
+  } catch (error) {
+    logger.error(`Error deleting notification: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+
+/**
+ * Delete all read notifications for a user
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.deleteAllRead = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    const [result] = await db.query(
+      'DELETE FROM notifications WHERE user_id = ? AND read_status = TRUE',
+      [userId]
+    );
+    
+    return res.status(200).json({
+      success: true,
+      message: `${result.affectedRows} read notifications deleted`
+    });
+  } catch (error) {
+    logger.error(`Error deleting read notifications: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+</file>
+
+<file path="backend/api/controllers/recommendationController.js">
+const db = require('../../config/database');
+const logger = require('../../utils/logger');
+const aiService = require('../../services/aiService');
+
+/**
+ * Get all recommendations for a user
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.getUserRecommendations = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    const query = `
+      SELECT r.*, e.title, e.description, e.date, e.time, e.location, e.avg_rating, e.status
+      FROM recommendations r
+      JOIN events e ON r.event_id = e.id
+      WHERE r.user_id = ?
+      ORDER BY r.score DESC
+    `;
+    
+    const [recommendations] = await db.query(query, [userId]);
+    
+    return res.status(200).json({
+      success: true,
+      count: recommendations.length,
+      data: recommendations
+    });
+  } catch (error) {
+    logger.error(`Error getting user recommendations: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+
+/**
+ * Generate new recommendations for a user
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.generateRecommendations = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    // Get user's preferences (based on past reviews and calendar)
+    const [userReviews] = await db.query(`
+      SELECT r.*, e.title, e.description, c.name as category
+      FROM reviews r
+      JOIN events e ON r.event_id = e.id
+      JOIN event_categories ec ON e.id = ec.event_id
+      JOIN categories c ON ec.category_id = c.id
+      WHERE r.user_id = ?
+    `, [userId]);
+    
+    // Get user's calendar entries
+    const [userCalendar] = await db.query(`
+      SELECT c.*, e.title, e.description
+      FROM calendars c
+      JOIN events e ON c.event_id = e.id
+      WHERE c.user_id = ?
+    `, [userId]);
+    
+    // Get available upcoming events that user hasn't reviewed or added to calendar
+    const [availableEvents] = await db.query(`
+      SELECT e.*, GROUP_CONCAT(c.name) as categories
+      FROM events e
+      JOIN event_categories ec ON e.id = ec.event_id
+      JOIN categories c ON ec.category_id = c.id
+      WHERE e.date >= CURDATE()
+      AND e.status = 'upcoming'
+      AND e.id NOT IN (
+        SELECT event_id FROM reviews WHERE user_id = ?
+      )
+      AND e.id NOT IN (
+        SELECT event_id FROM calendars WHERE user_id = ?
+      )
+      GROUP BY e.id
+    `, [userId, userId]);
+    
+    if (availableEvents.length === 0) {
+      return res.status(200).json({
+        success: true,
+        message: 'No new events available for recommendations',
+        data: []
+      });
+    }
+    
+    // Generate recommendations using AI service
+    const recommendations = await aiService.generateRecommendations(
+      userId,
+      userReviews,
+      userCalendar,
+      availableEvents
+    );
+    
+    // Save recommendations to database
+    const insertPromises = recommendations.map(async (rec) => {
+      // Check if recommendation already exists
+      const [existing] = await db.query(
+        'SELECT * FROM recommendations WHERE user_id = ? AND event_id = ?',
+        [userId, rec.event_id]
+      );
+      
+      if (existing.length > 0) {
+        // Update existing recommendation
+        await db.query(
+          'UPDATE recommendations SET score = ?, reason = ? WHERE user_id = ? AND event_id = ?',
+          [rec.score, rec.reason, userId, rec.event_id]
+        );
+      } else {
+        // Insert new recommendation
+        await db.query(
+          'INSERT INTO recommendations (user_id, event_id, score, reason) VALUES (?, ?, ?, ?)',
+          [userId, rec.event_id, rec.score, rec.reason]
+        );
+      }
+    });
+    
+    await Promise.all(insertPromises);
+    
+    // Get updated recommendations
+    const [updatedRecs] = await db.query(`
+      SELECT r.*, e.title, e.description, e.date, e.time, e.location, e.avg_rating
+      FROM recommendations r
+      JOIN events e ON r.event_id = e.id
+      WHERE r.user_id = ?
+      ORDER BY r.score DESC
+    `, [userId]);
+    
+    return res.status(200).json({
+      success: true,
+      count: updatedRecs.length,
+      data: updatedRecs
+    });
+  } catch (error) {
+    logger.error(`Error generating recommendations: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+
+/**
+ * Get top recommendations for a user (limited number)
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.getTopRecommendations = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { limit = 5 } = req.query; // Default to top 5
+    
+    const query = `
+      SELECT r.*, e.title, e.description, e.date, e.time, e.location, e.avg_rating, e.status
+      FROM recommendations r
+      JOIN events e ON r.event_id = e.id
+      WHERE r.user_id = ? AND e.date >= CURDATE() AND e.status = 'upcoming'
+      ORDER BY r.score DESC
+      LIMIT ?
+    `;
+    
+    const [recommendations] = await db.query(query, [userId, parseInt(limit)]);
+    
+    return res.status(200).json({
+      success: true,
+      count: recommendations.length,
+      data: recommendations
+    });
+  } catch (error) {
+    logger.error(`Error getting top recommendations: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+
+/**
+ * Delete a recommendation
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.deleteRecommendation = async (req, res) => {
+  try {
+    const recommendationId = req.params.id;
+    const userId = req.user.id;
+    
+    // Verify recommendation belongs to user
+    const [recommendation] = await db.query(
+      'SELECT * FROM recommendations WHERE id = ? AND user_id = ?',
+      [recommendationId, userId]
+    );
+    
+    if (recommendation.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recommendation not found or does not belong to user'
+      });
+    }
+    
+    await db.query('DELETE FROM recommendations WHERE id = ?', [recommendationId]);
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Recommendation deleted successfully'
+    });
+  } catch (error) {
+    logger.error(`Error deleting recommendation: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+
+/**
+ * Provide feedback on a recommendation (for improving future recommendations)
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.provideFeedback = async (req, res) => {
+  try {
+    const recommendationId = req.params.id;
+    const userId = req.user.id;
+    const { feedback } = req.body;
+    
+    if (!feedback || !['relevant', 'not_relevant'].includes(feedback)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Please provide valid feedback (relevant or not_relevant)'
+      });
+    }
+    
+    // Verify recommendation belongs to user
+    const [recommendation] = await db.query(
+      'SELECT * FROM recommendations WHERE id = ? AND user_id = ?',
+      [recommendationId, userId]
+    );
+    
+    if (recommendation.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Recommendation not found or does not belong to user'
+      });
+    }
+    
+    // Store feedback in AI service for model improvement
+    await aiService.storeRecommendationFeedback(
+      userId,
+      recommendation[0].event_id,
+      feedback
+    );
+    
+    return res.status(200).json({
+      success: true,
+      message: 'Feedback provided successfully'
+    });
+  } catch (error) {
+    logger.error(`Error providing recommendation feedback: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+
+/**
+ * Get recommendations by category
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ */
+exports.getRecommendationsByCategory = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { categoryId } = req.params;
+    
+    // Verify category exists
+    const [category] = await db.query(
+      'SELECT * FROM categories WHERE id = ?',
+      [categoryId]
+    );
+    
+    if (category.length === 0) {
+      return res.status(404).json({
+        success: false,
+        message: 'Category not found'
+      });
+    }
+    
+    const query = `
+      SELECT r.*, e.title, e.description, e.date, e.time, e.location, e.avg_rating
+      FROM recommendations r
+      JOIN events e ON r.event_id = e.id
+      JOIN event_categories ec ON e.id = ec.event_id
+      WHERE r.user_id = ? 
+      AND ec.category_id = ?
+      AND e.date >= CURDATE()
+      ORDER BY r.score DESC
+    `;
+    
+    const [recommendations] = await db.query(query, [userId, categoryId]);
+    
+    return res.status(200).json({
+      success: true,
+      count: recommendations.length,
+      category: category[0].name,
+      data: recommendations
+    });
+  } catch (error) {
+    logger.error(`Error getting recommendations by category: ${error.message}`);
+    return res.status(500).json({
+      success: false,
+      message: 'Server Error'
+    });
+  }
+};
+</file>
+
+<file path="backend/api/controllers/reviewController.js">
+const db = require('../../config/database');
+const aiService = require('../../services/aiService');
+
+exports.createReview = async (req, res) => {
+  try {
+    const { eventId, rating, content } = req.body;
+    const userId = req.user.id;
+    
+    // Check if event exists
+    const [events] = await db.query('SELECT * FROM events WHERE id = ?', [eventId]);
+    
+    if (events.length === 0) {
+      return res.status(404).json({ message: 'Event not found' });
+    }
+    
+    // Check if user has already reviewed this event
+    const [existingReviews] = await db.query(
+      'SELECT * FROM reviews WHERE user_id = ? AND event_id = ?',
+      [userId, eventId]
+    );
+    
+    if (existingReviews.length > 0) {
+      return res.status(400).json({ message: 'You have already reviewed this event' });
+    }
+    
+    // Analyze sentiment using AI service
+    const sentimentAnalysis = await aiService.analyzeSentiment(content);
+    const { score: sentimentScore, category: sentimentCategory } = sentimentAnalysis;
+    
+    // Insert review
+    const [result] = await db.query(
+      'INSERT INTO reviews (user_id, event_id, rating, content, sentiment_score, sentiment_category) VALUES (?, ?, ?, ?, ?, ?)',
+      [userId, eventId, rating, content, sentimentScore, sentimentCategory]
+    );
+    
+    // Update event's average rating
+    await updateEventAverageRating(eventId);
+    
+    // Create notification for event organizer
+    const [eventDetails] = await db.query(
+      'SELECT organizer_id, title FROM events WHERE id = ?',
+      [eventId]
+    );
+    
+    if (eventDetails.length > 0) {
+      const organizerId = eventDetails[0].organizer_id;
+      const eventTitle = eventDetails[0].title;
+      
+      await db.query(
+        'INSERT INTO notifications (user_id, content, type, related_id) VALUES (?, ?, ?, ?)',
+        [
+          organizerId,
+          `Your event "${eventTitle}" received a new ${rating}-star review`,
+          'review',
+          result.insertId
+        ]
+      );
+    }
+    
+    res.status(201).json({
+      id: result.insertId,
+      userId,
+      eventId,
+      rating,
+      content,
+      sentimentScore,
+      sentimentCategory,
+      message: 'Review created successfully'
+    });
+  } catch (error) {
+    console.error('Create review error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.getEventReviews = async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    const { sort = 'newest', page = 1, limit = 10 } = req.query;
+    
+    // Check if event exists
+    const [events] = await db.query('SELECT * FROM events WHERE id = ?', [eventId]);
+    
+    if (events.length === 0) {
+      return res.status(404).json({ message: 'Event not found' });
+    }
+    
+    // Determine sort order
+    let orderBy;
+    switch (sort) {
+      case 'oldest':
+        orderBy = 'r.created_at ASC';
+        break;
+      case 'highest':
+        orderBy = 'r.rating DESC, r.created_at DESC';
+        break;
+      case 'lowest':
+        orderBy = 'r.rating ASC, r.created_at DESC';
+        break;
+      case 'newest':
+      default:
+        orderBy = 'r.created_at DESC';
+    }
+    
+    // Calculate offset for pagination
+    const offset = (page - 1) * limit;
+    
+    // Get reviews with user information
+    const [reviews] = await db.query(`
+      SELECT r.*, u.username, u.profile_pic
+      FROM reviews r
+      JOIN users u ON r.user_id = u.id
+      WHERE r.event_id = ?
+      ORDER BY ${orderBy}
+      LIMIT ? OFFSET ?
+    `, [eventId, parseInt(limit), parseInt(offset)]);
+    
+    // Get total count for pagination
+    const [countResult] = await db.query(
+      'SELECT COUNT(*) as total FROM reviews WHERE event_id = ?',
+      [eventId]
+    );
+    
+    const total = countResult[0].total;
+    
+    res.json({
+      reviews,
+      pagination: {
+        total,
+        page: parseInt(page),
+        pageSize: parseInt(limit),
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Get event reviews error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.getUserReviews = async (req, res) => {
+  try {
+    const userId = req.params.userId || req.user.id;
+    const { page = 1, limit = 10 } = req.query;
+    
+    // Calculate offset for pagination
+    const offset = (page - 1) * limit;
+    
+    // Get reviews with event information
+    const [reviews] = await db.query(`
+      SELECT r.*, e.title as event_title, e.date as event_date, e.image as event_image
+      FROM reviews r
+      JOIN events e ON r.event_id = e.id
+      WHERE r.user_id = ?
+      ORDER BY r.created_at DESC
+      LIMIT ? OFFSET ?
+    `, [userId, parseInt(limit), parseInt(offset)]);
+    
+    // Get total count for pagination
+    const [countResult] = await db.query(
+      'SELECT COUNT(*) as total FROM reviews WHERE user_id = ?',
+      [userId]
+    );
+    
+    const total = countResult[0].total;
+    
+    res.json({
+      reviews,
+      pagination: {
+        total,
+        page: parseInt(page),
+        pageSize: parseInt(limit),
+        totalPages: Math.ceil(total / limit)
+      }
+    });
+  } catch (error) {
+    console.error('Get user reviews error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.getReviewById = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    // Get review with user and event information
+    const [reviews] = await db.query(`
+      SELECT r.*, u.username, u.profile_pic, e.title as event_title
+      FROM reviews r
+      JOIN users u ON r.user_id = u.id
+      JOIN events e ON r.event_id = e.id
+      WHERE r.id = ?
+    `, [id]);
+    
+    if (reviews.length === 0) {
+      return res.status(404).json({ message: 'Review not found' });
+    }
+    
+    res.json(reviews[0]);
+  } catch (error) {
+    console.error('Get review error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.updateReview = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { rating, content } = req.body;
+    const userId = req.user.id;
+    
+    // Check if review exists and belongs to the user
+    const [reviews] = await db.query(
+      'SELECT * FROM reviews WHERE id = ?',
+      [id]
+    );
+    
+    if (reviews.length === 0) {
+      return res.status(404).json({ message: 'Review not found' });
+    }
+    
+    if (reviews[0].user_id !== userId && !req.user.isAdmin) {
+      return res.status(403).json({ message: 'Not authorized to update this review' });
+    }
+    
+    // Update fields as needed
+    let updateFields = [];
+    let queryParams = [];
+    
+    if (rating) {
+      updateFields.push('rating = ?');
+      queryParams.push(rating);
+    }
+    
+    if (content) {
+      // Re-analyze sentiment if content is updated
+      const sentimentAnalysis = await aiService.analyzeSentiment(content);
+      const { score: sentimentScore, category: sentimentCategory } = sentimentAnalysis;
+      
+      updateFields.push('content = ?');
+      queryParams.push(content);
+      
+      updateFields.push('sentiment_score = ?');
+      queryParams.push(sentimentScore);
+      
+      updateFields.push('sentiment_category = ?');
+      queryParams.push(sentimentCategory);
+    }
+    
+    if (updateFields.length === 0) {
+      return res.status(400).json({ message: 'No fields to update' });
+    }
+    
+    // Add review ID to params
+    queryParams.push(id);
+    
+    const query = `UPDATE reviews SET ${updateFields.join(', ')} WHERE id = ?`;
+    
+    await db.query(query, queryParams);
+    
+    // Update event's average rating
+    const eventId = reviews[0].event_id;
+    await updateEventAverageRating(eventId);
+    
+    res.json({ message: 'Review updated successfully' });
+  } catch (error) {
+    console.error('Update review error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.deleteReview = async (req, res) => {
+  try {
+    const { id } = req.params;
+    const userId = req.user.id;
+    
+    // Check if review exists and belongs to the user
+    const [reviews] = await db.query(
+      'SELECT * FROM reviews WHERE id = ?',
+      [id]
+    );
+    
+    if (reviews.length === 0) {
+      return res.status(404).json({ message: 'Review not found' });
+    }
+    
+    if (reviews[0].user_id !== userId && !req.user.isAdmin) {
+      return res.status(403).json({ message: 'Not authorized to delete this review' });
+    }
+    
+    // Store event ID before deleting the review
+    const eventId = reviews[0].event_id;
+    
+    // Delete review
+    await db.query('DELETE FROM reviews WHERE id = ?', [id]);
+    
+    // Update event's average rating
+    await updateEventAverageRating(eventId);
+    
+    res.json({ message: 'Review deleted successfully' });
+  } catch (error) {
+    console.error('Delete review error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+exports.getReviewStats = async (req, res) => {
+  try {
+    const { eventId } = req.params;
+    
+    // Check if event exists
+    const [events] = await db.query('SELECT * FROM events WHERE id = ?', [eventId]);
+    
+    if (events.length === 0) {
+      return res.status(404).json({ message: 'Event not found' });
+    }
+    
+    // Get review statistics
+    const [reviewStats] = await db.query(`
+      SELECT 
+        COUNT(*) as total_reviews,
+        AVG(rating) as average_rating,
+        COUNT(CASE WHEN rating = 5 THEN 1 END) as five_star,
+        COUNT(CASE WHEN rating = 4 THEN 1 END) as four_star,
+        COUNT(CASE WHEN rating = 3 THEN 1 END) as three_star,
+        COUNT(CASE WHEN rating = 2 THEN 1 END) as two_star,
+        COUNT(CASE WHEN rating = 1 THEN 1 END) as one_star,
+        COUNT(CASE WHEN sentiment_category = 'positive' THEN 1 END) as positive_reviews,
+        COUNT(CASE WHEN sentiment_category = 'neutral' THEN 1 END) as neutral_reviews,
+        COUNT(CASE WHEN sentiment_category = 'negative' THEN 1 END) as negative_reviews
+      FROM reviews
+      WHERE event_id = ?
+    `, [eventId]);
+    
+    res.json(reviewStats[0]);
+  } catch (error) {
+    console.error('Get review stats error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// Helper function to update event's average rating
+async function updateEventAverageRating(eventId) {
+  try {
+    // Calculate new average rating
+    const [avgResult] = await db.query(
+      'SELECT AVG(rating) as avg_rating FROM reviews WHERE event_id = ?',
+      [eventId]
+    );
+    
+    const avgRating = avgResult[0].avg_rating || 0;
+    
+    // Update event's avg_rating
+    await db.query(
+      'UPDATE events SET avg_rating = ? WHERE id = ?',
+      [avgRating, eventId]
+    );
+    
+    return avgRating;
+  } catch (error) {
+    console.error('Update average rating error:', error);
+    throw error;
+  }
+}
+</file>
+
+<file path="backend/api/middleware/auth.js">
+const jwt = require('jsonwebtoken');
+const db = require('../../config/database');
+require('dotenv').config();
+
+exports.authenticate = async (req, res, next) => {
+  try {
+    // Get token from header
+    const authHeader = req.headers.authorization;
+    
+    if (!authHeader || !authHeader.startsWith('Bearer ')) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication failed. No token provided.'
+      });
+    }
+    
+    const token = authHeader.split(' ')[1];
+    
+    // Verify token
+    const decoded = jwt.verify(token, process.env.JWT_SECRET);
+    
+    // Check if user exists
+    const [user] = await db.query('SELECT id, username, email, is_admin FROM users WHERE id = ?', [decoded.id]);
+    
+    if (user.length === 0) {
+      return res.status(401).json({
+        success: false,
+        message: 'User not found'
+      });
+    }
+    
+    // Set user in request
+    req.user = user[0];
+    next();
+  } catch (error) {
+    if (error.name === 'JsonWebTokenError') {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid token.'
+      });
+    }
+    
+    if (error.name === 'TokenExpiredError') {
+      return res.status(401).json({
+        success: false,
+        message: 'Token expired.'
+      });
+    }
+    
+    return res.status(500).json({
+      success: false,
+      message: 'Server error.'
+    });
+  }
+};
+
+exports.isAdmin = (req, res, next) => {
+  if (!req.user.is_admin) {
+    return res.status(403).json({
+      success: false,
+      message: 'Access denied. Admin privileges required.'
+    });
+  }
+  next();
+};
+</file>
+
+<file path="backend/api/models/calendarModel.js">
+// calendarModel.js
+const db = require('../../config/database');
+
+/**
+ * Calendar model
+ */
+const Calendar = {
+  /**
+   * Add event to user's calendar
+   * @param {Object} calendarData - Calendar data
+   * @returns {Object} - Created calendar entry
+   */
+  async addEvent(calendarData) {
+    try {
+      // Define reminder settings JSON if provi`ded
+      let reminderSettings = null;
+      if (calendarData.reminder_settings) {
+        if (typeof calendarData.reminder_settings === 'string') {
+          reminderSettings = calendarData.reminder_settings;
+        } else {
+          reminderSettings = JSON.stringify(calendarData.reminder_settings);
+        }
+      }
+
+      // Insert calendar entry into database
+      const result = await db.query(
+        `INSERT INTO calendars (user_id, event_id, reminder_settings, is_synced) VALUES (?, ?, ?, ?)`,
+        [
+          calendarData.user_id,
+          calendarData.event_id,
+          reminderSettings,
+          calendarData.is_synced || false
+        ]
+      );
+
+      // Get the created calendar entry
+      const [calendar] = await this.findById(result.insertId);
+      return calendar;
+    } catch (error) {
+      throw error;
+    }
+  },
+
+  /**
+   * Find calendar entry by ID
+   * @param {number} id - Calendar ID
+   * @returns {Object} - Calendar object
+   */
+  async findById(id) {
+    return await db.query(
+      `SELECT c.*, e.title as event_title, e.date as event_date, e.time as event_time
+       FROM calendars c
+       JOIN events e ON c.event_id = e.id
+       WHERE c.id = ?`,
+      [id]
+    );
+  },
+
+  /**
+   * Find calendar entry by user and event
+   * @param {number} userId - User ID
+   * @param {number} eventId - Event ID
+   * @returns {Object} - Calendar object
+   */
+  async findByUserAndEvent(userId, eventId) {
+    return await db.query(
+      `SELECT c.*, e.title as event_title, e.date as event_date, e.time as event_time
+       FROM calendars c
+       JOIN events e ON c.event_id = e.id
+       WHERE c.user_id = ? AND c.event_id = ?`,
+      [userId, eventId]
+    );
+  },
+
+  /**
+   * Update calendar entry
+   * @param {number} id - Calendar ID
+   * @param {Object} calendarData - Calendar data to update
+   * @returns {Object} - Updated calendar object
+   */
+  async update(id, calendarData) {
+    // Create dynamic update query based on provided fields
+    const fields = [];
+    const values = [];
+
+    if (calendarData.reminder_settings) {
+      let reminderSettings = null;
+      if (typeof calendarData.reminder_settings === 'string') {
+        reminderSettings = calendarData.reminder_settings;
+      } else {
+        reminderSettings = JSON.stringify(calendarData.reminder_settings);
+      }
+      
+      fields.push('reminder_settings = ?');
+      values.push(reminderSettings);
+    }
+    
+    if (calendarData.is_synced !== undefined) {
+      fields.push('is_synced = ?');
+      values.push(calendarData.is_synced);
+    }
+
+    // Only proceed if there are fields to update
+    if (fields.length === 0) {
+      return await this.findById(id);
+    }
+
+    // Add ID to values array
+    values.push(id);
+
+    // Execute update query
+    await db.query(
+      `UPDATE calendars SET ${fields.join(', ')} WHERE id = ?`,
+      values
+    );
+
+    // Return updated calendar entry
+    const [updatedCalendar] = await this.findById(id);
+    return updatedCalendar;
+  },
+
+  /**
+   * Remove event from user's calendar
+   * @param {number} id - Calendar ID
+   * @returns {boolean} - Success status
+   */
+  async removeEvent(id) {
+    const result = await db.query('DELETE FROM calendars WHERE id = ?', [id]);
+    return result.affectedRows > 0;
+  },
+
+  /**
+   * Get user's calendar events
+   * @param {number} userId - User ID
+   * @param {Object} options - Query options (limit, offset, filter)
+   * @returns {Array} - Array of calendar objects
+   */
+  async getUserEvents(userId, options = { limit: 10, offset: 0, filter: {} }) {
+    let query = `SELECT c.*, e.title, e.description, e.date, e.time, e.location, e.status, e.image
+                 FROM calendars c
+                 JOIN events e ON c.event_id = e.id
+                 WHERE c.user_id = ?`;
+    
+    const queryParams = [userId];
+    
+    // Add filter conditions
+    if (options.filter) {
+      if (options.filter.dateFrom) {
+        query += ' AND e.date >= ?';
+        queryParams.push(options.filter.dateFrom);
+      }
+      
+      if (options.filter.dateTo) {
+        query += ' AND e.date <= ?';
+        queryParams.push(options.filter.dateTo);
+      }
+      
+      if (options.filter.status) {
+        query += ' AND e.status = ?';
+        queryParams.push(options.filter.status);
+      }
+    }
+    
+    // Add sorting and pagination
+    query += ' ORDER BY e.date ASC, e.time ASC LIMIT ? OFFSET ?';
+    queryParams.push(options.limit, options.offset);
+    
+    return await db.query(query, queryParams);
+  },
+
+  /**
+   * Get upcoming events for reminder
+   * @param {number} minutesAhead - Minutes ahead to look for events
+   * @returns {Array} - Array of calendar objects with events coming up
+   */
+  async getUpcomingEvents(minutesAhead = 60) {
+    const now = new Date();
+    const targetDate = new Date(now.getTime() + minutesAhead * 60000);
+    
+    return await db.query(
+      `SELECT c.*, e.title, e.date, e.time, e.location, u.email as user_email, u.username as user_name
+       FROM calendars c
+       JOIN events e ON c.event_id = e.id
+       JOIN users u ON c.user_id = u.id
+       WHERE e.date = CURDATE() 
+       AND TIME_TO_SEC(TIMEDIFF(e.time, CURTIME())) BETWEEN 0 AND ?
+       AND JSON_EXTRACT(c.reminder_settings, '$.enabled') = TRUE`,
+      [minutesAhead * 60]
+    );
+  },
+
+  /**
+   * Check if user has added event to calendar
+   * @param {number} userId - User ID
+   * @param {number} eventId - Event ID
+   * @returns {boolean} - True if event is in user's calendar
+   */
+  async hasEvent(userId, eventId) {
+    const [result] = await db.query(
+      `SELECT COUNT(*) as count
+       FROM calendars
+       WHERE user_id = ? AND event_id = ?`,
+      [userId, eventId]
+    );
+    
+    return result.count > 0;
+  }
+};
+
+module.exports = Calendar;
+</file>
+
+<file path="backend/api/routes/calendar.js">
+const express = require('express');
+const router = express.Router();
+const calendarController = require('../controllers/calendarController');
+const { authenticate } = require('../middleware/auth');
+
+// Apply authentication middleware to all routes
+router.use(authenticate);
+
+// Get all calendar entries for a user
+router.get('/', calendarController.getUserCalendarEntries);
+
+// Get upcoming events from calendar
+router.get('/upcoming', calendarController.getUpcomingEvents);
+
+// Add an event to user's calendar
+router.post('/', calendarController.addToCalendar);
+
+// Update reminder settings
+router.put('/:id/reminder', calendarController.updateReminderSettings);
+
+// Update sync status
+router.put('/:id/sync', calendarController.updateSyncStatus);
+
+// Remove event from calendar
+router.delete('/:id', calendarController.removeFromCalendar);
+
+module.exports = router;
+</file>
+
+<file path="backend/api/routes/categories.js">
+const express = require('express');
+const router = express.Router();
+const categoryController = require('../controllers/categoryController');
+const auth = require('../middleware/auth');
+const validation = require('../middleware/validation');
+
+// Public routes
+router.get('/', categoryController.getAllCategories);
+router.get('/:id', categoryController.getCategoryById);
+
+// Admin routes
+router.post('/', auth.authenticateUser, auth.authorizeAdmin, validation.validateCategoryCreation, categoryController.createCategory);
+router.put('/:id', auth.authenticateUser, auth.authorizeAdmin, validation.validateCategoryUpdate, categoryController.updateCategory);
+router.delete('/:id', auth.authenticateUser, auth.authorizeAdmin, categoryController.deleteCategory);
+
+module.exports = router;
+</file>
+
+<file path="backend/api/routes/events.js">
+const express = require('express');
+const router = express.Router();
+const eventController = require('../controllers/eventController');
+const auth = require('../middleware/auth');
+const validation = require('../middleware/validation');
+
+// Public routes
+router.get('/', eventController.getAllEvents);
+router.get('/featured', eventController.getFeaturedEvents);
+router.get('/search', eventController.searchEvents);
+router.get('/:id', eventController.getEventById);
+router.get('/category/:categoryId', eventController.getEventsByCategory);
+
+// Protected routes
+router.post('/', auth.authenticateUser, validation.validateEventCreation, eventController.createEvent);
+router.put('/:id', auth.authenticateUser, validation.validateEventUpdate, eventController.updateEvent);
+router.delete('/:id', auth.authenticateUser, eventController.deleteEvent);
+router.get('/user/organized', auth.authenticateUser, eventController.getOrganizedEvents);
+router.get('/user/attending', auth.authenticateUser, eventController.getAttendingEvents);
+router.put('/:id/status', auth.authenticateUser, validation.validateEventStatusUpdate, eventController.updateEventStatus);
+router.post('/:id/image', auth.authenticateUser, eventController.uploadEventImage);
+
+// Admin routes
+router.get('/admin/all', auth.authenticateUser, auth.authorizeAdmin, eventController.adminGetAllEvents);
+router.put('/admin/events/:id', auth.authenticateUser, auth.authorizeAdmin, eventController.adminUpdateEvent);
+router.delete('/admin/events/:id', auth.authenticateUser, auth.authorizeAdmin, eventController.adminDeleteEvent);
+
+module.exports = router;
+</file>
+
+<file path="backend/api/routes/notifications.js">
+const express = require('express');
+const router = express.Router();
+const notificationController = require('../controllers/notificationController');
+const { authenticate } = require('../middleware/auth');
+
+// Apply authentication middleware to all routes
+router.use(authenticate);
+
+// Get all notifications for a user
+router.get('/', notificationController.getUserNotifications);
+
+// Get unread notifications count
+router.get('/unread', notificationController.getUnreadCount);
+
+// Create a new notification
+router.post('/', notificationController.createNotification);
+
+// Mark a notification as read
+router.put('/:id/read', notificationController.markAsRead);
+
+// Mark all notifications as read
+router.put('/read-all', notificationController.markAllAsRead);
+
+// Delete a notification
+router.delete('/:id', notificationController.deleteNotification);
+
+// Delete all read notifications
+router.delete('/read', notificationController.deleteAllRead);
+
+module.exports = router;
+</file>
+
+<file path="backend/api/routes/recommendations.js">
+const express = require('express');
+const router = express.Router();
+const recommendationController = require('../controllers/recommendationController');
+const { authenticate } = require('../middleware/auth');
+
+// Apply authentication middleware to all routes
+router.use(authenticate);
+
+// Get all recommendations for a user
+router.get('/', recommendationController.getUserRecommendations);
+
+// Get top recommendations
+router.get('/top', recommendationController.getTopRecommendations);
+
+// Get recommendations by category
+router.get('/category/:categoryId', recommendationController.getRecommendationsByCategory);
+
+// Generate new recommendations
+router.post('/generate', recommendationController.generateRecommendations);
+
+// Provide feedback on a recommendation
+router.post('/:id/feedback', recommendationController.provideFeedback);
+
+// Delete a recommendation
+router.delete('/:id', recommendationController.deleteRecommendation);
+
+module.exports = router;
+</file>
+
+<file path="backend/api/routes/reviews.js">
+const express = require('express');
+const router = express.Router();
+const reviewController = require('../controllers/reviewController');
+const auth = require('../middleware/auth');
+const validation = require('../middleware/validation');
+
+// Public routes
+router.get('/event/:eventId', reviewController.getReviewsByEvent);
+router.get('/event/:eventId/summary', reviewController.getEventReviewSummary);
+
+// Protected routes
+router.post('/', auth.authenticateUser, validation.validateReviewCreation, reviewController.createReview);
+router.put('/:id', auth.authenticateUser, validation.validateReviewUpdate, reviewController.updateReview);
+router.delete('/:id', auth.authenticateUser, reviewController.deleteReview);
+router.get('/user', auth.authenticateUser, reviewController.getUserReviews);
+
+// Admin routes
+router.get('/admin/all', auth.authenticateUser, auth.authorizeAdmin, reviewController.adminGetAllReviews);
+router.delete('/admin/reviews/:id', auth.authenticateUser, auth.authorizeAdmin, reviewController.adminDeleteReview);
+
+module.exports = router;
+</file>
+
+<file path="backend/api/routes/users.js">
+const express = require('express');
+const router = express.Router();
+const userController = require('../controllers/userController');
+const auth = require('../middleware/auth');
+const validation = require('../middleware/validation');
+
+// Public routes
+router.post('/register', validation.userRules.createUser, userController.register);
+router.post('/login', validation.userRules.login, userController.login);
+
+router.post('/forgot-password', 
+  validation.validateEmail || ((req, res, next) => next()), 
+  userController.forgotPassword || ((req, res) => res.status(501).json({ error: 'Not implemented' }))
 );
 
-// Create logger instance
-const logger = winston.createLogger({
-  level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
-  format: logFormat,
-  defaultMeta: { service: 'eventreviews-api' },
-  transports: [
-    // Write all logs with level 'error' and below to error.log
-    new winston.transports.File({ 
-      filename: path.join(__dirname, '../logs/error.log'), 
-      level: 'error' 
-    }),
-    // Write all logs with level 'info' and below to combined.log
-    new winston.transports.File({ 
-      filename: path.join(__dirname, '../logs/combined.log') 
-    })
-  ]
+router.post('/reset-password', 
+  validation.validatePasswordReset || ((req, res, next) => next()), 
+  userController.resetPassword || ((req, res) => res.status(501).json({ error: 'Not implemented' }))
+);
+
+// Protected routes
+router.get('/profile', auth.authenticateUser, 
+  userController.getProfile || ((req, res) => res.status(501).json({ error: 'User profile not implemented' }))
+);
+
+router.put('/profile', 
+  auth.authenticateUser, 
+  validation.userRules.updateUser, 
+  userController.updateUserProfile || ((req, res) => res.status(501).json({ error: 'Update profile not implemented' }))
+);
+
+router.get('/profile/:id', 
+  userController.getPublicUserProfile || ((req, res) => res.status(501).json({ error: 'Public profile not implemented' }))
+);
+
+router.delete('/account', 
+  auth.authenticateUser, 
+  userController.deleteAccount || ((req, res) => res.status(501).json({ error: 'Account deletion not implemented' }))
+);
+
+// Admin routes
+router.get('/admin/users', 
+  auth.authenticateUser, 
+  auth.authorizeAdmin, 
+  // Add fallback function in case getAllUsers is undefined
+  (req, res) => {
+    if (userController.getAllUsers) {
+      return userController.getAllUsers(req, res);
+    }
+    res.status(501).json({ error: 'Get all users functionality not implemented' });
+  }
+);
+
+router.put('/admin/users/:id', 
+  auth.authenticateUser, 
+  auth.authorizeAdmin, 
+  validation.validateUserUpdate || validation.userRules.updateUser || ((req, res, next) => next()),
+  userController.adminUpdateUser || ((req, res) => res.status(501).json({ error: 'Admin update user not implemented' }))
+);
+
+router.delete('/admin/users/:id', 
+  auth.authenticateUser, 
+  auth.authorizeAdmin, 
+  userController.adminDeleteUser || ((req, res) => res.status(501).json({ error: 'Admin delete user not implemented' }))
+);
+
+module.exports = router;
+</file>
+
+<file path="backend/config/database.js">
+const mysql = require('mysql2'); // Import MySQL library
+
+// Create a connection pool
+const pool = mysql.createPool({
+
+  host: process.env.DB_HOST || 'localhost',
+  user: process.env.DB_USER || 'root',
+  password: process.env.DB_PASSWORD || '',
+  database: process.env.DB_NAME || 'eventreviews',
+  waitForConnections: true,
+  connectionLimit: 10,
+  queueLimit: 0
+});
+
+// Test database connection
+async function testConnection() {
+  try {
+    const connection = await pool.getConnection();
+    console.log('Database connection successful');
+    connection.release();
+    return true;
+  } catch (error) {
+    console.error('Database connection failed:', error.message);
+    return false;
+  }
+}
+
+// Export the pool and test function
+module.exports = pool;
+module.exports.testConnection = testConnection;
+</file>
+
+<file path="backend/server.js">
+const express = require('express');
+const cors = require('cors');
+const morgan = require('morgan');
+const db = require('./config/database');
+const logger = require('./utils/logger');
+
+// Import routes
+const usersRoutes = require('./api/routes/users');
+const eventsRoutes = require('./api/routes/events');
+const reviewsRoutes = require('./api/routes/reviews');
+const categoriesRoutes = require('./api/routes/categories');
+const calendarRoutes = require('./api/routes/calendar');
+const notificationsRoutes = require('./api/routes/notifications');
+const recommendationsRoutes = require('./api/routes/recommendations');
+
+// Create Express app
+const app = express();
+
+// Middleware
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(morgan('dev'));
+
+// Test database connection
+(async () => {
+  const connected = await db.testConnection();
+  if (!connected) {
+    logger.error('Failed to connect to database. Exiting...');
+    process.exit(1);
+  }
+})();
+
+// Routes
+app.use('/api/users', usersRoutes);
+app.use('/api/events', eventsRoutes);
+app.use('/api/reviews', reviewsRoutes);
+app.use('/api/categories', categoriesRoutes);
+app.use('/api/calendar', calendarRoutes);
+app.use('/api/notifications', notificationsRoutes);
+app.use('/api/recommendations', recommendationsRoutes);
+
+// Root route
+app.get('/', (req, res) => {
+  res.send('Event Reviews API is running');
+});
+
+// Error handling middleware
+app.use((err, req, res, next) => {
+  logger.error(`Error: ${err.message}`);
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || 'Server Error'
+  });
+});
+
+// Start server
+const PORT = process.env.PORT || 5000;
+app.listen(PORT, () => {
+  logger.info(`Server running on port ${PORT}`);
 });
 </file>
 
-<file path="README.md">
-# review
+<file path="backend/service/ai.service.js">
+const logger = require('../utils/logger');
+
+/**
+ * Service to handle AI-related functionalities
+ */
+class AIService {
+  /**
+   * Generate personalized recommendations for a user
+   * @param {Number} userId - User ID
+   * @param {Array} userReviews - User's past reviews
+   * @param {Array} userCalendar - User's calendar entries
+   * @param {Array} availableEvents - Available upcoming events
+   * @returns {Array} - Recommended events with scores
+   */
+  async generateRecommendations(userId, userReviews, userCalendar, availableEvents) {
+    try {
+      // For now, this is a simplified recommendation algorithm
+      // In a real application, this would integrate with an AI service or ML model
+      
+      // Track user preferences by category
+      const categoryPreferences = {};
+      
+      // Analyze user reviews to determine preferences
+      userReviews.forEach(review => {
+        const category = review.category;
+        if (!categoryPreferences[category]) {
+          categoryPreferences[category] = { count: 0, totalRating: 0 };
+        }
+        
+        categoryPreferences[category].count++;
+        categoryPreferences[category].totalRating += review.rating;
+      });
+      
+      // Calculate average rating per category
+      Object.keys(categoryPreferences).forEach(category => {
+        categoryPreferences[category].avgRating = 
+          categoryPreferences[category].totalRating / categoryPreferences[category].count;
+      });
+      
+      // Score available events based on preferences
+      const recommendations = availableEvents.map(event => {
+        const eventCategories = event.categories.split(',');
+        let score = 0;
+        let matchCount = 0;
+        
+        // Calculate recommendation score based on category preferences
+        eventCategories.forEach(category => {
+          if (categoryPreferences[category]) {
+            // Higher weight for categories with higher ratings
+            score += (categoryPreferences[category].avgRating / 5) * 0.8;
+            score += (categoryPreferences[category].count / userReviews.length) * 0.2;
+            matchCount++;
+          }
+        });
+        
+        // Adjust score based on category matches
+        if (matchCount > 0) {
+          score = score / matchCount;
+        } else {
+          // Default score for events with no matching categories
+          score = 0.5;
+        }
+        
+        // Add small random factor to prevent identical scores
+        score += Math.random() * 0.1;
+        
+        // Ensure score is between 0 and 1
+        score = Math.min(Math.max(score, 0), 1);
+        
+        let reason = '';
+        if (score > 0.8) {
+          reason = 'Highly matches your preferences';
+        } else if (score > 0.6) {
+          reason = 'Similar to events you enjoyed';
+        } else if (score > 0.4) {
+          reason = 'You might be interested in this';
+        } else {
+          reason = 'Recommended to diversify your experiences';
+        }
+        
+        return {
+          user_id: userId,
+          event_id: event.id,
+          score: score,
+          reason: reason
+        };
+      });
+      
+      // Sort by score in descending order
+      return recommendations.sort((a, b) => b.score - a.score);
+    } catch (error) {
+      logger.error(`Error generating recommendations: ${error.message}`);
+      return [];
+    }
+  }
+  
+  /**
+   * Analyze sentiment of a review
+   * @param {String} content - Review content
+   * @returns {Object} - Sentiment analysis results
+   */
+  async analyzeSentiment(content) {
+    try {
+      // Simple sentiment analysis based on keywords
+      // In a real application, this would use a proper NLP service
+      const positiveWords = ['great', 'excellent', 'amazing', 'good', 'wonderful', 'fantastic', 'enjoyed', 'love'];
+      const negativeWords = ['bad', 'terrible', 'awful', 'poor', 'disappointing', 'waste', 'hate', 'dislike'];
+      
+      const words = content.toLowerCase().split(/\W+/);
+      let positiveScore = 0;
+      let negativeScore = 0;
+      
+      words.forEach(word => {
+        if (positiveWords.includes(word)) positiveScore++;
+        if (negativeWords.includes(word)) negativeScore++;
+      });
+      
+      const totalWords = words.length;
+      const sentimentScore = (positiveScore - negativeScore) / (totalWords || 1);
+      
+      let sentimentCategory = 'neutral';
+      if (sentimentScore > 0.05) sentimentCategory = 'positive';
+      if (sentimentScore < -0.05) sentimentCategory = 'negative';
+      
+      return {
+        sentimentScore: parseFloat(sentimentScore.toFixed(2)),
+        sentimentCategory
+      };
+    } catch (error) {
+      logger.error(`Error analyzing sentiment: ${error.message}`);
+      return { sentimentScore: 0, sentimentCategory: 'neutral' };
+    }
+  }
+  
+  /**
+   * Store recommendation feedback for model improvement
+   * @param {Number} userId - User ID
+   * @param {Number} eventId - Event ID
+   * @param {String} feedback - Feedback (relevant/not_relevant)
+   */
+  async storeRecommendationFeedback(userId, eventId, feedback) {
+    try {
+      // In a real application, this would store feedback for model retraining
+      logger.info(`Recommendation feedback stored: User ${userId}, Event ${eventId}, Feedback: ${feedback}`);
+      return true;
+    } catch (error) {
+      logger.error(`Error storing recommendation feedback: ${error.message}`);
+      return false;
+    }
+  }
+}
+
+module.exports = new AIService();const logger = require('../utils/logger');
+
+/**
+ * Service to handle AI-related functionalities
+ */
+class AIService {
+  /**
+   * Generate personalized recommendations for a user
+   * @param {Number} userId - User ID
+   * @param {Array} userReviews - User's past reviews
+   * @param {Array} userCalendar - User's calendar entries
+   * @param {Array} availableEvents - Available upcoming events
+   * @returns {Array} - Recommended events with scores
+   */
+  async generateRecommendations(userId, userReviews, userCalendar, availableEvents) {
+    try {
+      // For now, this is a simplified recommendation algorithm
+      // In a real application, this would integrate with an AI service or ML model
+      
+      // Track user preferences by category
+      const categoryPreferences = {};
+      
+      // Analyze user reviews to determine preferences
+      userReviews.forEach(review => {
+        const category = review.category;
+        if (!categoryPreferences[category]) {
+          categoryPreferences[category] = { count: 0, totalRating: 0 };
+        }
+        
+        categoryPreferences[category].count++;
+        categoryPreferences[category].totalRating += review.rating;
+      });
+      
+      // Calculate average rating per category
+      Object.keys(categoryPreferences).forEach(category => {
+        categoryPreferences[category].avgRating = 
+          categoryPreferences[category].totalRating / categoryPreferences[category].count;
+      });
+      
+      // Score available events based on preferences
+      const recommendations = availableEvents.map(event => {
+        const eventCategories = event.categories.split(',');
+        let score = 0;
+        let matchCount = 0;
+        
+        // Calculate recommendation score based on category preferences
+        eventCategories.forEach(category => {
+          if (categoryPreferences[category]) {
+            // Higher weight for categories with higher ratings
+            score += (categoryPreferences[category].avgRating / 5) * 0.8;
+            score += (categoryPreferences[category].count / userReviews.length) * 0.2;
+            matchCount++;
+          }
+        });
+        
+        // Adjust score based on category matches
+        if (matchCount > 0) {
+          score = score / matchCount;
+        } else {
+          // Default score for events with no matching categories
+          score = 0.5;
+        }
+        
+        // Add small random factor to prevent identical scores
+        score += Math.random() * 0.1;
+        
+        // Ensure score is between 0 and 1
+        score = Math.min(Math.max(score, 0), 1);
+        
+        let reason = '';
+        if (score > 0.8) {
+          reason = 'Highly matches your preferences';
+        } else if (score > 0.6) {
+          reason = 'Similar to events you enjoyed';
+        } else if (score > 0.4) {
+          reason = 'You might be interested in this';
+        } else {
+          reason = 'Recommended to diversify your experiences';
+        }
+        
+        return {
+          user_id: userId,
+          event_id: event.id,
+          score: score,
+          reason: reason
+        };
+      });
+      
+      // Sort by score in descending order
+      return recommendations.sort((a, b) => b.score - a.score);
+    } catch (error) {
+      logger.error(`Error generating recommendations: ${error.message}`);
+      return [];
+    }
+  }
+  
+  /**
+   * Analyze sentiment of a review
+   * @param {String} content - Review content
+   * @returns {Object} - Sentiment analysis results
+   */
+  async analyzeSentiment(content) {
+    try {
+      // Simple sentiment analysis based on keywords
+      // In a real application, this would use a proper NLP service
+      const positiveWords = ['great', 'excellent', 'amazing', 'good', 'wonderful', 'fantastic', 'enjoyed', 'love'];
+      const negativeWords = ['bad', 'terrible', 'awful', 'poor', 'disappointing', 'waste', 'hate', 'dislike'];
+      
+      const words = content.toLowerCase().split(/\W+/);
+      let positiveScore = 0;
+      let negativeScore = 0;
+      
+      words.forEach(word => {
+        if (positiveWords.includes(word)) positiveScore++;
+        if (negativeWords.includes(word)) negativeScore++;
+      });
+      
+      const totalWords = words.length;
+      const sentimentScore = (positiveScore - negativeScore) / (totalWords || 1);
+      
+      let sentimentCategory = 'neutral';
+      if (sentimentScore > 0.05) sentimentCategory = 'positive';
+      if (sentimentScore < -0.05) sentimentCategory = 'negative';
+      
+      return {
+        sentimentScore: parseFloat(sentimentScore.toFixed(2)),
+        sentimentCategory
+      };
+    } catch (error) {
+      logger.error(`Error analyzing sentiment: ${error.message}`);
+      return { sentimentScore: 0, sentimentCategory: 'neutral' };
+    }
+  }
+  
+  /**
+   * Store recommendation feedback for model improvement
+   * @param {Number} userId - User ID
+   * @param {Number} eventId - Event ID
+   * @param {String} feedback - Feedback (relevant/not_relevant)
+   */
+  async storeRecommendationFeedback(userId, eventId, feedback) {
+    try {
+      // In a real application, this would store feedback for model retraining
+      logger.info(`Recommendation feedback stored: User ${userId}, Event ${eventId}, Feedback: ${feedback}`);
+      return true;
+    } catch (error) {
+      logger.error(`Error storing recommendation feedback: ${error.message}`);
+      return false;
+    }
+  }
+}
+
+module.exports = new AIService();
+</file>
+
+<file path="backend/service/emailService.js">
+const nodemailer = require('nodemailer');
+const config = require('../config/config');
+const logger = require('../utils/logger');
+const fs = require('fs').promises;
+const path = require('path');
+const handlebars = require('handlebars');
+
+/**
+ * Email Service for sending notifications and system emails
+ */
+class EmailService {
+  constructor() {
+    this.transporter = nodemailer.createTransport({
+      host: config.email.host,
+      port: config.email.port,
+      secure: config.email.secure,
+      auth: {
+        user: config.email.user,
+        pass: config.email.password
+      }
+    });
+    
+    this.templates = {};
+    this.initializeTemplates();
+  }
+
+  /**
+   * Initialize email templates
+   */
+  async initializeTemplates() {
+    try {
+      // Define template paths
+      const templateDir = path.join(__dirname, '../templates/email');
+      const templates = [
+        'welcome',
+        'reset-password',
+        'event-reminder',
+        'new-review',
+        'event-updates',
+        'account-verification'
+      ];
+      
+      // Load templates
+      for (const template of templates) {
+        const content = await fs.readFile(
+          path.join(templateDir, `${template}.html`),
+          'utf8'
+        );
+        this.templates[template] = handlebars.compile(content);
+      }
+      
+      logger.info('Email templates loaded successfully');
+    } catch (error) {
+      logger.error('Failed to load email templates:', error);
+    }
+  }
+
+  /**
+   * Send an email
+   * @param {Object} options - Email options
+   * @returns {Promise<boolean>} - Success status
+   */
+  async sendEmail(options) {
+    try {
+      const { to, subject, template, data } = options;
+      
+      // Render template if provided
+      let html = '';
+      if (template && this.templates[template]) {
+        html = this.templates[template](data);
+      } else if (options.html) {
+        html = options.html;
+      } else {
+        html = options.text || '';
+      }
+      
+      const mailOptions = {
+        from: config.email.from,
+        to,
+        subject,
+        text: options.text || '',
+        html
+      };
+      
+      // Add attachments if any
+      if (options.attachments) {
+        mailOptions.attachments = options.attachments;
+      }
+      
+      const info = await this.transporter.sendMail(mailOptions);
+      logger.info(`Email sent: ${info.messageId}`);
+      return true;
+    } catch (error) {
+      logger.error('Error sending email:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Send welcome email to new user
+   * @param {Object} user - User object with email and username
+   * @returns {Promise<boolean>} - Success status
+   */
+  async sendWelcomeEmail(user) {
+    return this.sendEmail({
+      to: user.email,
+      subject: 'Welcome to EventReviews!',
+      template: 'welcome',
+      data: {
+        username: user.username,
+        loginUrl: `${config.frontendUrl}/login`
+      }
+    });
+  }
+
+  /**
+   * Send password reset email
+   * @param {Object} user - User object with email
+   * @param {string} resetToken - Password reset token
+   * @returns {Promise<boolean>} - Success status
+   */
+  async sendPasswordResetEmail(user, resetToken) {
+    const resetUrl = `${config.frontendUrl}/reset-password?token=${resetToken}`;
+    
+    return this.sendEmail({
+      to: user.email,
+      subject: 'Password Reset Request',
+      template: 'reset-password',
+      data: {
+        username: user.username,
+        resetUrl,
+        expiryTime: '1 hour'
+      }
+    });
+  }
+
+  /**
+   * Send event reminder email
+   * @param {Object} user - User object
+   * @param {Object} event - Event object
+   * @param {Object} reminder - Reminder settings
+   * @returns {Promise<boolean>} - Success status
+   */
+  async sendEventReminderEmail(user, event, reminder) {
+    return this.sendEmail({
+      to: user.email,
+      subject: `Reminder: ${event.title} is coming up!`,
+      template: 'event-reminder',
+      data: {
+        username: user.username,
+        eventTitle: event.title,
+        eventDate: event.date,
+        eventTime: event.time,
+        eventLocation: event.location,
+        eventUrl: `${config.frontendUrl}/events/${event.id}`,
+        reminderTime: reminder.time
+      }
+    });
+  }
+
+  /**
+   * Send notification about new review
+   * @param {Object} user - User (organizer) object
+   * @param {Object} event - Event object
+   * @param {Object} review - Review object
+   * @returns {Promise<boolean>} - Success status
+   */
+  async sendNewReviewNotification(user, event, review) {
+    return this.sendEmail({
+      to: user.email,
+      subject: `New Review for ${event.title}`,
+      template: 'new-review',
+      data: {
+        username: user.username,
+        eventTitle: event.title,
+        reviewRating: review.rating,
+        reviewContent: review.content,
+        eventUrl: `${config.frontendUrl}/events/${event.id}`,
+        reviewerName: review.reviewerName
+      }
+    });
+  }
+
+  /**
+   * Send batch emails (for newsletters or announcements)
+   * @param {Array} recipients - Array of recipient user objects
+   * @param {Object} emailData - Email data
+   * @returns {Promise<Object>} - Results of sending batch emails
+   */
+  async sendBatchEmails(recipients, emailData) {
+    const results = {
+      successful: 0,
+      failed: 0,
+      failures: []
+    };
+    
+    for (const recipient of recipients) {
+      try {
+        const sent = await this.sendEmail({
+          to: recipient.email,
+          subject: emailData.subject,
+          template: emailData.template,
+          data: {
+            ...emailData.data,
+            username: recipient.username
+          }
+        });
+        
+        if (sent) {
+          results.successful++;
+        } else {
+          results.failed++;
+          results.failures.push(recipient.email);
+        }
+      } catch (error) {
+        logger.error(`Failed to send email to ${recipient.email}:`, error);
+        results.failed++;
+        results.failures.push(recipient.email);
+      }
+    }
+    
+    return results;
+  }
+}
+
+module.exports = new EmailService();
+</file>
+
+<file path="backend/service/uploadService.js">
+const AWS = require('aws-sdk');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const { v4: uuidv4 } = require('uuid');
+const config = require('../config/config');
+const logger = require('../utils/logger');
+
+/**
+ * Service for handling file uploads (profile pictures, event images)
+ */
+class UploadService {
+  constructor() {
+    this.storage = this.configureStorage();
+    this.upload = multer({
+      storage: this.storage,
+      limits: {
+        fileSize: 5 * 1024 * 1024, // 5MB limit
+      },
+      fileFilter: this.fileFilter
+    });
+    
+    // Configure AWS S3 if enabled
+    if (config.storage.type === 's3') {
+      this.s3 = new AWS.S3({
+        accessKeyId: config.storage.s3.accessKeyId,
+        secretAccessKey: config.storage.s3.secretAccessKey,
+        region: config.storage.s3.region
+      });
+    }
+  }
+
+  /**
+   * Configure storage based on config
+   * @returns {multer.StorageEngine} - Configured storage engine
+   */
+  configureStorage() {
+    if (config.storage.type === 'local') {
+      // Local storage
+      return multer.diskStorage({
+        destination: (req, file, cb) => {
+          const uploadDir = config.storage.local.uploadDir;
+          // Create directory if it doesn't exist
+          if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+          }
+          cb(null, uploadDir);
+        },
+        filename: (req, file, cb) => {
+          const uniqueName = `${uuidv4()}${path.extname(file.originalname)}`;
+          cb(null, uniqueName);
+        }
+      });
+    } else {
+      // For S3, use memory storage
+      return multer.memoryStorage();
+    }
+  }
+
+  /**
+   * Filter files by type
+   * @param {Object} req - Express request object
+   * @param {Object} file - Uploaded file object
+   * @param {Function} cb - Callback function
+   */
+  fileFilter(req, file, cb) {
+    // Allow only images
+    const allowedTypes = /jpeg|jpg|png|gif/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+    
+    if (extname && mimetype) {
+      return cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed!'));
+    }
+  }
+
+  /**
+   * Get multer middleware for specific field
+   * @param {string} fieldName - Form field name
+   * @returns {Function} - Multer middleware
+   */
+  getUploadMiddleware(fieldName) {
+    return this.upload.single(fieldName);
+  }
+
+  /**
+   * Upload file to S3
+   * @param {Object} file - File object from multer
+   * @param {string} folder - Folder name in S3
+   * @returns {Promise<string>} - File URL
+   */
+  async uploadToS3(file, folder = '') {
+    try {
+      const uniqueName = `${folder}/${uuidv4()}${path.extname(file.originalname)}`;
+      
+      const params = {
+        Bucket: config.storage.s3.bucket,
+        Key: uniqueName,
+        Body: file.buffer,
+        ContentType: file.mimetype,
+        ACL: 'public-read'
+      };
+      
+      const result = await this.s3.upload(params).promise();
+      logger.info(`File uploaded to S3: ${result.Location}`);
+      return result.Location;
+    } catch (error) {
+      logger.error('Error uploading to S3:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Save file to local storage or S3
+   * @param {Object} file - File object from multer
+   * @param {string} folder - Folder name
+   * @returns {Promise<string>} - File URL or path
+   */
+  async saveFile(file, folder = '') {
+    if (!file) {
+      throw new Error('No file provided');
+    }
+    
+    if (config.storage.type === 's3') {
+      return await this.uploadToS3(file, folder);
+    } else {
+      // For local storage, file already saved by multer
+      return `${config.baseUrl}/uploads/${file.filename}`;
+    }
+  }
+
+  /**
+   * Delete file from storage
+   * @param {string} fileUrl - URL or path of the file
+   * @returns {Promise<boolean>} - Success status
+   */
+  async deleteFile(fileUrl) {
+    try {
+      if (config.storage.type === 's3') {
+        // Extract key from URL
+        const key = fileUrl.split('/').slice(3).join('/');
+        
+        const params = {
+          Bucket: config.storage.s3.bucket,
+          Key: key
+        };
+        
+        await this.s3.deleteObject(params).promise();
+        logger.info(`File deleted from S3: ${key}`);
+        return true;
+      } else {
+        // For local storage
+        const filePath = path.join(
+          config.storage.local.uploadDir,
+          path.basename(fileUrl)
+        );
+        
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          logger.info(`File deleted from local storage: ${filePath}`);
+          return true;
+        }
+        return false;
+      }
+    } catch (error) {
+      logger.error('Error deleting file:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Process event image upload
+   * @param {Object} file - Uploaded file object
+   * @returns {Promise<string>} - File URL
+   */
+  async processEventImage(file) {
+    return this.saveFile(file, 'events');
+  }
+
+  /**
+   * Process profile picture upload
+   * @param {Object} file - Uploaded file object
+   * @returns {Promise<string>} - File URL
+   */
+  async processProfilePicture(file) {
+    return this.saveFile(file, 'profiles');
+  }
+}
+
+module.exports = new UploadService();const AWS = require('aws-sdk');
+const multer = require('multer');
+const path = require('path');
+const fs = require('fs');
+const { v4: uuidv4 } = require('uuid');
+const config = require('../config/config');
+const logger = require('../utils/logger');
+
+/**
+ * Service for handling file uploads (profile pictures, event images)
+ */
+class UploadService {
+  constructor() {
+    this.storage = this.configureStorage();
+    this.upload = multer({
+      storage: this.storage,
+      limits: {
+        fileSize: 5 * 1024 * 1024, // 5MB limit
+      },
+      fileFilter: this.fileFilter
+    });
+    
+    // Configure AWS S3 if enabled
+    if (config.storage.type === 's3') {
+      this.s3 = new AWS.S3({
+        accessKeyId: config.storage.s3.accessKeyId,
+        secretAccessKey: config.storage.s3.secretAccessKey,
+        region: config.storage.s3.region
+      });
+    }
+  }
+
+  /**
+   * Configure storage based on config
+   * @returns {multer.StorageEngine} - Configured storage engine
+   */
+  configureStorage() {
+    if (config.storage.type === 'local') {
+      // Local storage
+      return multer.diskStorage({
+        destination: (req, file, cb) => {
+          const uploadDir = config.storage.local.uploadDir;
+          // Create directory if it doesn't exist
+          if (!fs.existsSync(uploadDir)) {
+            fs.mkdirSync(uploadDir, { recursive: true });
+          }
+          cb(null, uploadDir);
+        },
+        filename: (req, file, cb) => {
+          const uniqueName = `${uuidv4()}${path.extname(file.originalname)}`;
+          cb(null, uniqueName);
+        }
+      });
+    } else {
+      // For S3, use memory storage
+      return multer.memoryStorage();
+    }
+  }
+
+  /**
+   * Filter files by type
+   * @param {Object} req - Express request object
+   * @param {Object} file - Uploaded file object
+   * @param {Function} cb - Callback function
+   */
+  fileFilter(req, file, cb) {
+    // Allow only images
+    const allowedTypes = /jpeg|jpg|png|gif/;
+    const extname = allowedTypes.test(path.extname(file.originalname).toLowerCase());
+    const mimetype = allowedTypes.test(file.mimetype);
+    
+    if (extname && mimetype) {
+      return cb(null, true);
+    } else {
+      cb(new Error('Only image files are allowed!'));
+    }
+  }
+
+  /**
+   * Get multer middleware for specific field
+   * @param {string} fieldName - Form field name
+   * @returns {Function} - Multer middleware
+   */
+  getUploadMiddleware(fieldName) {
+    return this.upload.single(fieldName);
+  }
+
+  /**
+   * Upload file to S3
+   * @param {Object} file - File object from multer
+   * @param {string} folder - Folder name in S3
+   * @returns {Promise<string>} - File URL
+   */
+  async uploadToS3(file, folder = '') {
+    try {
+      const uniqueName = `${folder}/${uuidv4()}${path.extname(file.originalname)}`;
+      
+      const params = {
+        Bucket: config.storage.s3.bucket,
+        Key: uniqueName,
+        Body: file.buffer,
+        ContentType: file.mimetype,
+        ACL: 'public-read'
+      };
+      
+      const result = await this.s3.upload(params).promise();
+      logger.info(`File uploaded to S3: ${result.Location}`);
+      return result.Location;
+    } catch (error) {
+      logger.error('Error uploading to S3:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Save file to local storage or S3
+   * @param {Object} file - File object from multer
+   * @param {string} folder - Folder name
+   * @returns {Promise<string>} - File URL or path
+   */
+  async saveFile(file, folder = '') {
+    if (!file) {
+      throw new Error('No file provided');
+    }
+    
+    if (config.storage.type === 's3') {
+      return await this.uploadToS3(file, folder);
+    } else {
+      // For local storage, file already saved by multer
+      return `${config.baseUrl}/uploads/${file.filename}`;
+    }
+  }
+
+  /**
+   * Delete file from storage
+   * @param {string} fileUrl - URL or path of the file
+   * @returns {Promise<boolean>} - Success status
+   */
+  async deleteFile(fileUrl) {
+    try {
+      if (config.storage.type === 's3') {
+        // Extract key from URL
+        const key = fileUrl.split('/').slice(3).join('/');
+        
+        const params = {
+          Bucket: config.storage.s3.bucket,
+          Key: key
+        };
+        
+        await this.s3.deleteObject(params).promise();
+        logger.info(`File deleted from S3: ${key}`);
+        return true;
+      } else {
+        // For local storage
+        const filePath = path.join(
+          config.storage.local.uploadDir,
+          path.basename(fileUrl)
+        );
+        
+        if (fs.existsSync(filePath)) {
+          fs.unlinkSync(filePath);
+          logger.info(`File deleted from local storage: ${filePath}`);
+          return true;
+        }
+        return false;
+      }
+    } catch (error) {
+      logger.error('Error deleting file:', error);
+      return false;
+    }
+  }
+
+  /**
+   * Process event image upload
+   * @param {Object} file - Uploaded file object
+   * @returns {Promise<string>} - File URL
+   */
+  async processEventImage(file) {
+    return this.saveFile(file, 'events');
+  }
+
+  /**
+   * Process profile picture upload
+   * @param {Object} file - Uploaded file object
+   * @returns {Promise<string>} - File URL
+   */
+  async processProfilePicture(file) {
+    return this.saveFile(file, 'profiles');
+  }
+}
+
+module.exports = new UploadService();
+</file>
+
+<file path="backend/utils/logger.js">
+const winston = require('winston');
+require('dotenv').config();
+
+// Define log levels
+const levels = {
+  error: 0,
+  warn: 1,
+  info: 2,
+  http: 3,
+  debug: 4
+};
+
+// Define log colors
+const colors = {
+  error: 'red',
+  warn: 'yellow',
+  info: 'green',
+  http: 'magenta',
+  debug: 'blue'
+};
+
+// Add colors to winston
+winston.addColors(colors);
+
+// Create format
+const format = winston.format.combine(
+  winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
+  winston.format.printf(
+    info => `${info.timestamp} ${info.level}: ${info.message}`
+  )
+);
+
+// Define which transports to use
+const transports = [
+  // Console transport
+  new winston.transports.Console({
+    format: winston.format.combine(
+      winston.format.colorize({ all: true }),
+      format
+    )
+  }),
+  // File transport for errors
+  new winston.transports.File({
+    filename: 'logs/error.log',
+    level: 'error'
+  }),
+  // File transport for all logs
+  new winston.transports.File({ filename: 'logs/all.log' })
+];
+
+// Create logger
+const logger = winston.createLogger({
+  level: process.env.LOG_LEVEL || 'info',
+  levels,
+  format,
+  transports
+});
+
+module.exports = logger;
+</file>
+
+<file path=".gitignore">
+.qodo
+</file>
+
+<file path="backend/api/controllers/userController.js">
+const db = require('../../config/database');
+const bcrypt = require('bcrypt');
+const jwt = require('jsonwebtoken');
+
+// Use direct exports at the bottom instead of exporting functions individually
+const register = async (req, res) => {
+  try {
+    const { username, email, password, bio } = req.body;
+    
+    // Hash password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(password, salt);
+    
+    // Check if user already exists
+    const [existingUsers] = await db.query(
+      'SELECT * FROM users WHERE username = ? OR email = ?',
+      [username, email]
+    );
+    
+    if (existingUsers.length > 0) {
+      return res.status(400).json({ message: 'Username or email already exists' });
+    }
+    
+    // Insert new user
+    const [result] = await db.query(
+      'INSERT INTO users (username, email, password, bio) VALUES (?, ?, ?, ?)',
+      [username, email, hashedPassword, bio || null]
+    );
+    
+    // Generate token
+    const token = jwt.sign(
+      { id: result.insertId, username, isAdmin: false },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+    
+    res.status(201).json({
+      message: 'User registered successfully',
+      token,
+      user: {
+        id: result.insertId,
+        username,
+        email,
+        bio: bio || null,
+        isAdmin: false
+      }
+    });
+  } catch (error) {
+    console.error('Registration error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const login = async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    
+    // Find user by email
+    const [users] = await db.query('SELECT * FROM users WHERE email = ?', [email]);
+    
+    if (users.length === 0) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+    
+    const user = users[0];
+    
+    // Check password
+    const isMatch = await bcrypt.compare(password, user.password);
+    
+    if (!isMatch) {
+      return res.status(401).json({ message: 'Invalid credentials' });
+    }
+    
+    // Generate token
+    const token = jwt.sign(
+      { id: user.id, username: user.username, isAdmin: user.is_admin },
+      process.env.JWT_SECRET,
+      { expiresIn: '24h' }
+    );
+    
+    res.json({
+      message: 'Login successful',
+      token,
+      user: {
+        id: user.id,
+        username: user.username,
+        email: user.email,
+        bio: user.bio,
+        profilePic: user.profile_pic,
+        isAdmin: user.is_admin
+      }
+    });
+  } catch (error) {
+    console.error('Login error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const getProfile = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    const [users] = await db.query('SELECT id, username, email, profile_pic, bio, is_admin, created_at FROM users WHERE id = ?', [userId]);
+    
+    if (users.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    const user = users[0];
+    
+    res.json({
+      id: user.id,
+      username: user.username,
+      email: user.email,
+      profilePic: user.profile_pic,
+      bio: user.bio,
+      isAdmin: user.is_admin,
+      createdAt: user.created_at
+    });
+  } catch (error) {
+    console.error('Get profile error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const updateUserProfile = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    const { username, email, bio } = req.body;
+    let profilePic = null;
+    
+    // If there's a file upload, get the path
+    if (req.file) {
+      profilePic = req.file.path;
+    }
+    
+    // Check if username or email already exists for other users
+    if (username || email) {
+      const [existingUsers] = await db.query(
+        'SELECT * FROM users WHERE (username = ? OR email = ?) AND id != ?',
+        [username || '', email || '', userId]
+      );
+      
+      if (existingUsers.length > 0) {
+        return res.status(400).json({ message: 'Username or email already in use' });
+      }
+    }
+    
+    // Construct update query dynamically
+    let updateFields = [];
+    let queryParams = [];
+    
+    if (username) {
+      updateFields.push('username = ?');
+      queryParams.push(username);
+    }
+    
+    if (email) {
+      updateFields.push('email = ?');
+      queryParams.push(email);
+    }
+    
+    if (bio !== undefined) {
+      updateFields.push('bio = ?');
+      queryParams.push(bio);
+    }
+    
+    if (profilePic) {
+      updateFields.push('profile_pic = ?');
+      queryParams.push(profilePic);
+    }
+    
+    if (updateFields.length === 0) {
+      return res.status(400).json({ message: 'No fields to update' });
+    }
+    
+    // Add userId to params
+    queryParams.push(userId);
+    
+    const query = `UPDATE users SET ${updateFields.join(', ')} WHERE id = ?`;
+    
+    await db.query(query, queryParams);
+    
+    res.json({ message: 'Profile updated successfully' });
+  } catch (error) {
+    console.error('Update profile error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const getPublicUserProfile = async (req, res) => {
+  try {
+    const { id } = req.params;
+    
+    const [users] = await db.query(
+      'SELECT id, username, bio, profile_pic, created_at FROM users WHERE id = ?',
+      [id]
+    );
+    
+    if (users.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    res.json(users[0]);
+  } catch (error) {
+    console.error('Get user error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const deleteAccount = async (req, res) => {
+  try {
+    const userId = req.user.id;
+    
+    // Delete user - cascade will handle related records
+    await db.query('DELETE FROM users WHERE id = ?', [userId]);
+    
+    res.json({ message: 'Account deleted successfully' });
+  } catch (error) {
+    console.error('Delete account error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const getAllUsers = async (req, res) => {
+  try {
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+    
+    const [users] = await db.query(
+      'SELECT id, username, email, profile_pic, bio, is_admin, created_at FROM users'
+    );
+    
+    res.json(users);
+  } catch (error) {
+    console.error('Get all users error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const adminUpdateUser = async (req, res) => {
+  try {
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+    
+    const { id } = req.params;
+    const { isAdmin, username, email, bio } = req.body;
+    
+    // Construct update query dynamically
+    let updateFields = [];
+    let queryParams = [];
+    
+    if (isAdmin !== undefined) {
+      updateFields.push('is_admin = ?');
+      queryParams.push(isAdmin);
+    }
+    
+    if (username) {
+      updateFields.push('username = ?');
+      queryParams.push(username);
+    }
+    
+    if (email) {
+      updateFields.push('email = ?');
+      queryParams.push(email);
+    }
+    
+    if (bio !== undefined) {
+      updateFields.push('bio = ?');
+      queryParams.push(bio);
+    }
+    
+    if (updateFields.length === 0) {
+      return res.status(400).json({ message: 'No fields to update' });
+    }
+    
+    // Add userId to params
+    queryParams.push(id);
+    
+    const query = `UPDATE users SET ${updateFields.join(', ')} WHERE id = ?`;
+    
+    await db.query(query, queryParams);
+    
+    res.json({ message: 'User updated successfully' });
+  } catch (error) {
+    console.error('Admin update user error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    // Check if user exists
+    const [users] = await db.query('SELECT id FROM users WHERE email = ?', [email]);
+    
+    if (users.length === 0) {
+      // For security reasons, don't reveal if email exists or not
+      return res.json({ message: 'If your email is registered, you will receive a password reset link' });
+    }
+    
+    // Generate a reset token
+    const resetToken = jwt.sign(
+      { id: users[0].id, purpose: 'password-reset' },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+    
+    // In a real application, you would send an email with the reset link
+    // For this implementation, we'll just return the token
+    
+    // Store token in database (optional, depends on your implementation)
+    await db.query(
+      'UPDATE users SET reset_token = ?, reset_token_expires = DATE_ADD(NOW(), INTERVAL 1 HOUR) WHERE id = ?',
+      [resetToken, users[0].id]
+    );
+    
+    res.json({ 
+      message: 'If your email is registered, you will receive a password reset link',
+      // In a real application, you would NOT return the token to the API response
+      // This is just for demonstration purposes
+      resetToken 
+    });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const resetPassword = async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+    
+    // Verify token
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+      
+      // Check if the token was created for password reset
+      if (decoded.purpose !== 'password-reset') {
+        return res.status(400).json({ message: 'Invalid token' });
+      }
+    } catch (err) {
+      return res.status(400).json({ message: 'Invalid or expired token' });
+    }
+    
+    // Check if token exists in database (optional)
+    const [users] = await db.query(
+      'SELECT id FROM users WHERE id = ? AND reset_token = ? AND reset_token_expires > NOW()',
+      [decoded.id, token]
+    );
+    
+    if (users.length === 0) {
+      return res.status(400).json({ message: 'Invalid or expired token' });
+    }
+    
+    // Hash new password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+    
+    // Update password and clear reset token
+    await db.query(
+      'UPDATE users SET password = ?, reset_token = NULL, reset_token_expires = NULL WHERE id = ?',
+      [hashedPassword, decoded.id]
+    );
+    
+    res.json({ message: 'Password has been reset successfully' });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const adminDeleteUser = async (req, res) => {
+  try {
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+    
+    const { id } = req.params;
+    
+    // Check if the user exists
+    const [users] = await db.query('SELECT id FROM users WHERE id = ?', [id]);
+    
+    if (users.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    // Delete user - cascade will handle related records
+    await db.query('DELETE FROM users WHERE id = ?', [id]);
+    
+    res.json({ message: 'User deleted successfully' });
+  } catch (error) {
+    console.error('Admin delete user error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// Export all functions
+module.exports = {
+  register,
+  login,
+  getProfile,
+  updateUserProfile,
+  getPublicUserProfile,
+  deleteAccount,
+  getAllUsers,
+  adminUpdateUser,
+  forgotPassword,
+  resetPassword,
+  adminDeleteUser
+};
 </file>
 
 <file path="backend/package.json">
@@ -2887,7 +5918,8 @@ const logger = winston.createLogger({
   "description": "",
   "main": "server.js",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "test": "echo \"Error: no test specified\" && exit 1",
+    "dev": "node server.js"
   },
   "keywords": [],
   "author": "",
