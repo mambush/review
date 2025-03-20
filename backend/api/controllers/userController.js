@@ -2,7 +2,8 @@ const db = require('../../config/database');
 const bcrypt = require('bcrypt');
 const jwt = require('jsonwebtoken');
 
-exports.register = async (req, res) => {
+// Use direct exports at the bottom instead of exporting functions individually
+const register = async (req, res) => {
   try {
     const { username, email, password, bio } = req.body;
     
@@ -50,7 +51,7 @@ exports.register = async (req, res) => {
   }
 };
 
-exports.login = async (req, res) => {
+const login = async (req, res) => {
   try {
     const { email, password } = req.body;
     
@@ -95,7 +96,7 @@ exports.login = async (req, res) => {
   }
 };
 
-exports.getProfile = async (req, res) => {
+const getProfile = async (req, res) => {
   try {
     const userId = req.user.id;
     
@@ -122,7 +123,7 @@ exports.getProfile = async (req, res) => {
   }
 };
 
-exports.updateProfile = async (req, res) => {
+const updateUserProfile = async (req, res) => {
   try {
     const userId = req.user.id;
     const { username, email, bio } = req.body;
@@ -187,40 +188,7 @@ exports.updateProfile = async (req, res) => {
   }
 };
 
-exports.changePassword = async (req, res) => {
-  try {
-    const userId = req.user.id;
-    const { currentPassword, newPassword } = req.body;
-    
-    // Get current user
-    const [users] = await db.query('SELECT password FROM users WHERE id = ?', [userId]);
-    
-    if (users.length === 0) {
-      return res.status(404).json({ message: 'User not found' });
-    }
-    
-    // Verify current password
-    const isMatch = await bcrypt.compare(currentPassword, users[0].password);
-    
-    if (!isMatch) {
-      return res.status(401).json({ message: 'Current password is incorrect' });
-    }
-    
-    // Hash new password
-    const salt = await bcrypt.genSalt(10);
-    const hashedPassword = await bcrypt.hash(newPassword, salt);
-    
-    // Update password
-    await db.query('UPDATE users SET password = ? WHERE id = ?', [hashedPassword, userId]);
-    
-    res.json({ message: 'Password updated successfully' });
-  } catch (error) {
-    console.error('Change password error:', error);
-    res.status(500).json({ message: 'Server error' });
-  }
-};
-
-exports.getUserById = async (req, res) => {
+const getPublicUserProfile = async (req, res) => {
   try {
     const { id } = req.params;
     
@@ -240,7 +208,7 @@ exports.getUserById = async (req, res) => {
   }
 };
 
-exports.deleteAccount = async (req, res) => {
+const deleteAccount = async (req, res) => {
   try {
     const userId = req.user.id;
     
@@ -254,8 +222,7 @@ exports.deleteAccount = async (req, res) => {
   }
 };
 
-// Admin only functions
-exports.getAllUsers = async (req, res) => {
+const getAllUsers = async (req, res) => {
   try {
     if (!req.user.isAdmin) {
       return res.status(403).json({ message: 'Access denied' });
@@ -272,20 +239,177 @@ exports.getAllUsers = async (req, res) => {
   }
 };
 
-exports.toggleAdminStatus = async (req, res) => {
+const adminUpdateUser = async (req, res) => {
   try {
     if (!req.user.isAdmin) {
       return res.status(403).json({ message: 'Access denied' });
     }
     
     const { id } = req.params;
-    const { isAdmin } = req.body;
+    const { isAdmin, username, email, bio } = req.body;
     
-    await db.query('UPDATE users SET is_admin = ? WHERE id = ?', [isAdmin, id]);
+    // Construct update query dynamically
+    let updateFields = [];
+    let queryParams = [];
     
-    res.json({ message: 'Admin status updated successfully' });
+    if (isAdmin !== undefined) {
+      updateFields.push('is_admin = ?');
+      queryParams.push(isAdmin);
+    }
+    
+    if (username) {
+      updateFields.push('username = ?');
+      queryParams.push(username);
+    }
+    
+    if (email) {
+      updateFields.push('email = ?');
+      queryParams.push(email);
+    }
+    
+    if (bio !== undefined) {
+      updateFields.push('bio = ?');
+      queryParams.push(bio);
+    }
+    
+    if (updateFields.length === 0) {
+      return res.status(400).json({ message: 'No fields to update' });
+    }
+    
+    // Add userId to params
+    queryParams.push(id);
+    
+    const query = `UPDATE users SET ${updateFields.join(', ')} WHERE id = ?`;
+    
+    await db.query(query, queryParams);
+    
+    res.json({ message: 'User updated successfully' });
   } catch (error) {
-    console.error('Toggle admin status error:', error);
+    console.error('Admin update user error:', error);
     res.status(500).json({ message: 'Server error' });
   }
+};
+
+const forgotPassword = async (req, res) => {
+  try {
+    const { email } = req.body;
+    
+    // Check if user exists
+    const [users] = await db.query('SELECT id FROM users WHERE email = ?', [email]);
+    
+    if (users.length === 0) {
+      // For security reasons, don't reveal if email exists or not
+      return res.json({ message: 'If your email is registered, you will receive a password reset link' });
+    }
+    
+    // Generate a reset token
+    const resetToken = jwt.sign(
+      { id: users[0].id, purpose: 'password-reset' },
+      process.env.JWT_SECRET,
+      { expiresIn: '1h' }
+    );
+    
+    // In a real application, you would send an email with the reset link
+    // For this implementation, we'll just return the token
+    
+    // Store token in database (optional, depends on your implementation)
+    await db.query(
+      'UPDATE users SET reset_token = ?, reset_token_expires = DATE_ADD(NOW(), INTERVAL 1 HOUR) WHERE id = ?',
+      [resetToken, users[0].id]
+    );
+    
+    res.json({ 
+      message: 'If your email is registered, you will receive a password reset link',
+      // In a real application, you would NOT return the token to the API response
+      // This is just for demonstration purposes
+      resetToken 
+    });
+  } catch (error) {
+    console.error('Forgot password error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const resetPassword = async (req, res) => {
+  try {
+    const { token, newPassword } = req.body;
+    
+    // Verify token
+    let decoded;
+    try {
+      decoded = jwt.verify(token, process.env.JWT_SECRET);
+      
+      // Check if the token was created for password reset
+      if (decoded.purpose !== 'password-reset') {
+        return res.status(400).json({ message: 'Invalid token' });
+      }
+    } catch (err) {
+      return res.status(400).json({ message: 'Invalid or expired token' });
+    }
+    
+    // Check if token exists in database (optional)
+    const [users] = await db.query(
+      'SELECT id FROM users WHERE id = ? AND reset_token = ? AND reset_token_expires > NOW()',
+      [decoded.id, token]
+    );
+    
+    if (users.length === 0) {
+      return res.status(400).json({ message: 'Invalid or expired token' });
+    }
+    
+    // Hash new password
+    const salt = await bcrypt.genSalt(10);
+    const hashedPassword = await bcrypt.hash(newPassword, salt);
+    
+    // Update password and clear reset token
+    await db.query(
+      'UPDATE users SET password = ?, reset_token = NULL, reset_token_expires = NULL WHERE id = ?',
+      [hashedPassword, decoded.id]
+    );
+    
+    res.json({ message: 'Password has been reset successfully' });
+  } catch (error) {
+    console.error('Reset password error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+const adminDeleteUser = async (req, res) => {
+  try {
+    if (!req.user.isAdmin) {
+      return res.status(403).json({ message: 'Access denied' });
+    }
+    
+    const { id } = req.params;
+    
+    // Check if the user exists
+    const [users] = await db.query('SELECT id FROM users WHERE id = ?', [id]);
+    
+    if (users.length === 0) {
+      return res.status(404).json({ message: 'User not found' });
+    }
+    
+    // Delete user - cascade will handle related records
+    await db.query('DELETE FROM users WHERE id = ?', [id]);
+    
+    res.json({ message: 'User deleted successfully' });
+  } catch (error) {
+    console.error('Admin delete user error:', error);
+    res.status(500).json({ message: 'Server error' });
+  }
+};
+
+// Export all functions
+module.exports = {
+  register,
+  login,
+  getProfile,
+  updateUserProfile,
+  getPublicUserProfile,
+  deleteAccount,
+  getAllUsers,
+  adminUpdateUser,
+  forgotPassword,
+  resetPassword,
+  adminDeleteUser
 };

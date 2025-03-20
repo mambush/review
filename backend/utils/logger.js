@@ -1,28 +1,59 @@
 const winston = require('winston');
-const path = require('path');
+require('dotenv').config();
 
-// Define log format
-const logFormat = winston.format.combine(
+// Define log levels
+const levels = {
+  error: 0,
+  warn: 1,
+  info: 2,
+  http: 3,
+  debug: 4
+};
+
+// Define log colors
+const colors = {
+  error: 'red',
+  warn: 'yellow',
+  info: 'green',
+  http: 'magenta',
+  debug: 'blue'
+};
+
+// Add colors to winston
+winston.addColors(colors);
+
+// Create format
+const format = winston.format.combine(
   winston.format.timestamp({ format: 'YYYY-MM-DD HH:mm:ss' }),
-  winston.format.errors({ stack: true }),
-  winston.format.splat(),
-  winston.format.json()
+  winston.format.printf(
+    info => `${info.timestamp} ${info.level}: ${info.message}`
+  )
 );
 
-// Create logger instance
+// Define which transports to use
+const transports = [
+  // Console transport
+  new winston.transports.Console({
+    format: winston.format.combine(
+      winston.format.colorize({ all: true }),
+      format
+    )
+  }),
+  // File transport for errors
+  new winston.transports.File({
+    filename: 'logs/error.log',
+    level: 'error'
+  }),
+  // File transport for all logs
+  new winston.transports.File({ filename: 'logs/all.log' })
+];
+
+// Create logger
 const logger = winston.createLogger({
-  level: process.env.NODE_ENV === 'production' ? 'info' : 'debug',
-  format: logFormat,
-  defaultMeta: { service: 'eventreviews-api' },
-  transports: [
-    // Write all logs with level 'error' and below to error.log
-    new winston.transports.File({ 
-      filename: path.join(__dirname, '../logs/error.log'), 
-      level: 'error' 
-    }),
-    // Write all logs with level 'info' and below to combined.log
-    new winston.transports.File({ 
-      filename: path.join(__dirname, '../logs/combined.log') 
-    })
-  ]
+  level: process.env.LOG_LEVEL || 'info',
+  levels,
+  format,
+  transports
 });
+
+module.exports = logger;

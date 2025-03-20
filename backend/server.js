@@ -1,61 +1,61 @@
 const express = require('express');
 const cors = require('cors');
-const helmet = require('helmet');
 const morgan = require('morgan');
-const path = require('path');
-const dotenv = require('dotenv');
-const { logger } = require('./utils/logger');
-const errorHandler = require('./api/middleware/errorHandler');
+const db = require('./config/database');
+const logger = require('./utils/logger');
 
-// Load environment variables
-dotenv.config();
+// Import routes
+const usersRoutes = require('./api/routes/users');
+const eventsRoutes = require('./api/routes/events');
+const reviewsRoutes = require('./api/routes/reviews');
+const categoriesRoutes = require('./api/routes/categories');
+const calendarRoutes = require('./api/routes/calendar');
+const notificationsRoutes = require('./api/routes/notifications');
+const recommendationsRoutes = require('./api/routes/recommendations');
 
-// Initialize express app
+// Create Express app
 const app = express();
-const PORT = process.env.PORT || 3000;
-
-// Database connection
-const dbConnection = require('./config/database');
 
 // Middleware
-app.use(helmet()); // Security headers
-app.use(cors()); // Enable CORS
-app.use(express.json()); // Parse JSON bodies
-app.use(express.urlencoded({ extended: true })); // Parse URL-encoded bodies
-app.use(morgan('dev')); // HTTP request logger
+app.use(cors());
+app.use(express.json());
+app.use(express.urlencoded({ extended: true }));
+app.use(morgan('dev'));
 
-// Static files
-app.use('/uploads', express.static(path.join(__dirname, 'uploads')));
+// Test database connection
+(async () => {
+  const connected = await db.testConnection();
+  if (!connected) {
+    logger.error('Failed to connect to database. Exiting...');
+    process.exit(1);
+  }
+})();
 
 // Routes
-app.use('/api/users', require('./api/routes/users'));
-app.use('/api/events', require('./api/routes/events'));
-app.use('/api/reviews', require('./api/routes/reviews'));
-app.use('/api/categories', require('./api/routes/categories'));
-app.use('/api/calendar', require('./api/routes/calendar'));
-app.use('/api/notifications', require('./api/routes/notifications'));
-app.use('/api/recommendations', require('./api/routes/recommendations'));
+app.use('/api/users', usersRoutes);
+app.use('/api/events', eventsRoutes);
+app.use('/api/reviews', reviewsRoutes);
+app.use('/api/categories', categoriesRoutes);
+app.use('/api/calendar', calendarRoutes);
+app.use('/api/notifications', notificationsRoutes);
+app.use('/api/recommendations', recommendationsRoutes);
 
 // Root route
 app.get('/', (req, res) => {
-  res.json({ message: 'Welcome to the Event Reviews API' });
+  res.send('Event Reviews API is running');
 });
 
 // Error handling middleware
-app.use(errorHandler);
+app.use((err, req, res, next) => {
+  logger.error(`Error: ${err.message}`);
+  res.status(err.status || 500).json({
+    success: false,
+    message: err.message || 'Server Error'
+  });
+});
 
-// Start the server
+// Start server
+const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => {
   logger.info(`Server running on port ${PORT}`);
-  console.log(`Server running on port ${PORT}`);
 });
-
-// Handle unhandled promise rejections
-process.on('unhandledRejection', (err) => {
-  logger.error(`Unhandled Rejection: ${err.message}`);
-  console.error('Unhandled Rejection:', err);
-  // Close server & exit process
-  // server.close(() => process.exit(1));
-});
-
-module.exports = app; // For testing

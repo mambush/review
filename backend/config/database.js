@@ -1,14 +1,11 @@
-const mysql = require('mysql2/promise');
-const dotenv = require('dotenv');
-const { logger } = require('../utils/logger');
+const mysql = require('mysql2'); // Import MySQL library
 
-dotenv.config();
-
-// Database connection pool configuration
+// Create a connection pool
 const pool = mysql.createPool({
+
   host: process.env.DB_HOST || 'localhost',
   user: process.env.DB_USER || 'root',
-  password: process.env.DB_PASS || '',
+  password: process.env.DB_PASSWORD || '',
   database: process.env.DB_NAME || 'eventreviews',
   waitForConnections: true,
   connectionLimit: 10,
@@ -19,28 +16,15 @@ const pool = mysql.createPool({
 async function testConnection() {
   try {
     const connection = await pool.getConnection();
-    logger.info('Database connection established successfully');
+    console.log('Database connection successful');
     connection.release();
     return true;
-  } catch (err) {
-    logger.error(`Database connection failed: ${err.message}`);
-    console.error('Database connection failed:', err);
+  } catch (error) {
+    console.error('Database connection failed:', error.message);
     return false;
   }
 }
 
-// Initialize connection
-testConnection();
-
-module.exports = {
-  pool,
-  query: async (sql, params) => {
-    try {
-      const [results] = await pool.execute(sql, params);
-      return results;
-    } catch (error) {
-      logger.error(`DB Query Error: ${error.message}`);
-      throw error;
-    }
-  }
-};
+// Export the pool and test function
+module.exports = pool;
+module.exports.testConnection = testConnection;
